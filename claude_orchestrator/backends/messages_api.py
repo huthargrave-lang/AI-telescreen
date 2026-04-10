@@ -132,7 +132,7 @@ class MessagesApiBackend(BackendAdapter):
         continuation: bool,
     ) -> Dict[str, Any]:
         prompt = resolve_job_prompt(job)
-        system_prompt = state.system_prompt or job.metadata.get("system_prompt")
+        system_prompt = self._effective_system_prompt(state, job)
         messages = deepcopy(state.message_history)
         if not messages:
             messages.append({"role": "user", "content": prompt})
@@ -143,6 +143,7 @@ class MessagesApiBackend(BackendAdapter):
                     "content": "Continue from the previous checkpoint and finish the task without repeating unnecessary context.",
                 }
             )
+        _, messages = self._compact_messages(state.compact_summary, messages)
         max_tokens = int(job.metadata.get("max_tokens", self.config.backends.messages_api.max_tokens))
         request_payload: Dict[str, Any] = {
             "model": job.model or job.metadata.get("model") or self.config.backends.messages_api.model,
@@ -186,17 +187,91 @@ class MessagesApiBackend(BackendAdapter):
         text_output: str,
         stop_reason: Optional[str],
     ) -> ConversationState:
+        updated_history = deepcopy(request_messages) + ([{"role": "assistant", "content": text_output}] if text_output else [])
+        compact_summary, compacted_history = self._compact_messages(state.compact_summary, updated_history)
         updated = ConversationState(
             job_id=job.id,
             system_prompt=state.system_prompt,
-            message_history=deepcopy(request_messages)
-            + ([{"role": "assistant", "content": text_output}] if text_output else []),
-            compact_summary=(text_output[:280] + "...") if len(text_output) > 280 else text_output,
+            message_history=compacted_history,
+            compact_summary=compact_summary,
             tool_context=deepcopy(state.tool_context),
             last_checkpoint_at=utcnow(),
         )
         updated.tool_context["last_stop_reason"] = stop_reason
+        updated.tool_context["pending_followup"] = stop_reason == "max_tokens"
+        updated.tool_context["compaction_applied"] = compacted_history != updated_history
         return updated
+
+    def _effective_system_prompt(self, state: ConversationState, job: Job) -> Optional[str]:
+        base_system_prompt = state.system_prompt or job.metadata.get("system_prompt")
+        compact_summary = state.compact_summary
+        if not compact_summary:
+            return base_system_prompt
+        summary_block = (
+            "Conversation summary from earlier turns. Treat it as durable context for continuation.\n"
+            f"{compact_summary}"
+        )
+        if base_system_prompt:
+            return f"{base_system_prompt}\n\n{summary_block}"
+        return summary_block
+
+    def _compact_messages(
+        self,
+        existing_summary: Optional[str],
+        messages: List[Dict[str, Any]],
+    ) -> tuple[Optional[str], List[Dict[str, Any]]]:
+        threshold = self.config.backends.messages_api.compaction_message_threshold
+        char_threshold = self.config.backends.messages_api.compaction_char_threshold
+        if len(messages) <= threshold and self._message_char_count(messages) <= char_threshold:
+            return existing_summary, messages
+        keep_recent = min(
+            max(self.config.backends.messages_api.compaction_keep_recent_messages, 1),
+            max(len(messages), 1),
+        )
+        older_messages = messages[:-keep_recent]
+        recent_messages = messages[-keep_recent:]
+        summary = self._summarize_messages(existing_summary, older_messages)
+        return summary, recent_messages
+
+    def _summarize_messages(
+        self,
+        existing_summary: Optional[str],
+        messages: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        if not messages and existing_summary:
+            return existing_summary
+        lines: List[str] = []
+        if existing_summary:
+            lines.append(existing_summary.strip())
+        for message in messages:
+            role = str(message.get("role", "unknown")).upper()
+            content = self._stringify_content(message.get("content", "")).replace("\n", " ").strip()
+            if content:
+                lines.append(f"{role}: {content[:400]}")
+        if not lines:
+            return existing_summary
+        combined = "\n".join(lines)
+        limit = self.config.backends.messages_api.compaction_summary_char_limit
+        if len(combined) <= limit:
+            return combined
+        return f"...\n{combined[-limit:]}"
+
+    def _message_char_count(self, messages: List[Dict[str, Any]]) -> int:
+        return sum(len(self._stringify_content(message.get("content", ""))) for message in messages)
+
+    def _stringify_content(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, Mapping):
+                    if item.get("type") == "text":
+                        parts.append(str(item.get("text", "")))
+                else:
+                    parts.append(str(item))
+            return "\n".join(parts)
+        return str(content)
 
     def _translate_error(self, error: Exception, headers: Optional[Dict[str, str]] = None) -> Exception:
         status_code = getattr(error, "status_code", None)

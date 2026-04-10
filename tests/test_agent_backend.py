@@ -62,8 +62,10 @@ def test_agent_backend_checkpoint_resume(tmp_path):
 
     assert first.status == JobStatus.QUEUED
     assert backend.can_resume(_job(), first.updated_state) is True
+    assert first.updated_state.tool_context["agent_sdk"]["checkpoint"] == "cp-1"
 
     second = asyncio.run(backend.continue_job(_job(), first.updated_state, context))
 
     assert second.status == JobStatus.COMPLETED
     assert len(second.artifacts) == 1
+    assert second.updated_state.tool_context["agent_sdk"]["last_run"]["completed"] is True

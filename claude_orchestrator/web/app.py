@@ -34,7 +34,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         repository=context.repository,
         backends=context.backends,
     )
-    templates = Jinja2Templates(directory=str(root / "claude_orchestrator" / "web" / "templates"))
+    templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
     app = FastAPI(title="claude-orchestrator")
 
     def render_dashboard_context(request: Request) -> dict:
@@ -46,26 +46,55 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "refresh_seconds": orchestrator.config.ui.refresh_seconds,
         }
 
+    def serialize_job(job) -> dict:
+        return {
+            "id": job.id,
+            "status": job.status.value,
+            "backend": job.backend,
+            "task_type": job.task_type,
+            "priority": job.priority,
+            "attempt_count": job.attempt_count,
+            "max_attempts": job.max_attempts,
+            "next_retry_at": job.next_retry_at.isoformat() if job.next_retry_at else None,
+            "last_error_code": job.last_error_code,
+            "last_error_message": job.last_error_message,
+            "workspace_path": job.workspace_path,
+            "metadata": job.metadata,
+        }
+
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
-        return templates.TemplateResponse("dashboard.html", render_dashboard_context(request))
+        return templates.TemplateResponse(
+            request=request,
+            name="dashboard.html",
+            context=render_dashboard_context(request),
+        )
 
     @app.get("/partials/counts", response_class=HTMLResponse)
     async def counts_partial(request: Request):
         context_data = render_dashboard_context(request)
-        return templates.TemplateResponse("partials/job_counts.html", context_data)
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/job_counts.html",
+            context=context_data,
+        )
 
     @app.get("/partials/jobs", response_class=HTMLResponse)
     async def jobs_partial(request: Request):
         context_data = render_dashboard_context(request)
-        return templates.TemplateResponse("partials/job_table.html", context_data)
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/job_table.html",
+            context=context_data,
+        )
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
     async def job_detail(request: Request, job_id: str):
         details = orchestrator.inspect(job_id)
         return templates.TemplateResponse(
-            "job_detail.html",
-            {
+            request=request,
+            name="job_detail.html",
+            context={
                 "request": request,
                 "job": details.job,
                 "state": details.state,
@@ -74,6 +103,51 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "artifacts": details.artifacts,
             },
         )
+
+    @app.get("/api/status")
+    async def api_status():
+        return {
+            "counts": orchestrator.status(),
+            "refresh_seconds": orchestrator.config.ui.refresh_seconds,
+        }
+
+    @app.get("/api/jobs")
+    async def api_jobs(limit: int = 50):
+        return {"jobs": [serialize_job(job) for job in orchestrator.list_jobs(limit=limit)]}
+
+    @app.get("/api/jobs/{job_id}")
+    async def api_job_detail(job_id: str):
+        details = orchestrator.inspect(job_id)
+        return {
+            "job": serialize_job(details.job),
+            "state": {
+                "compact_summary": details.state.compact_summary,
+                "last_checkpoint_at": details.state.last_checkpoint_at.isoformat()
+                if details.state.last_checkpoint_at
+                else None,
+                "tool_context": details.state.tool_context,
+            },
+            "runs": [
+                {
+                    "id": run.id,
+                    "started_at": run.started_at.isoformat(),
+                    "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+                    "usage": run.usage,
+                    "exit_reason": run.exit_reason,
+                    "response_summary": run.response_summary,
+                    "error": run.error,
+                }
+                for run in details.runs
+            ],
+            "events": [
+                {
+                    "timestamp": event.timestamp.isoformat(),
+                    "event_type": event.event_type,
+                    "detail": event.detail,
+                }
+                for event in details.events
+            ],
+        }
 
     @app.post("/jobs/{job_id}/retry")
     async def retry_job(job_id: str):

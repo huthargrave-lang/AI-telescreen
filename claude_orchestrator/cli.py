@@ -121,18 +121,82 @@ if typer is not None:  # pragma: no branch
     @app.command("inspect")
     def inspect_command(
         job_id: str,
+        json_output: bool = typer.Option(False, "--json", help="Emit structured JSON."),
         config: Optional[Path] = typer.Option(None, "--config", help="Config TOML path."),
     ) -> None:
         orchestrator, _ = _build_services(config)
         details = orchestrator.inspect(job_id)
         job = details.job
+        payload = {
+            "job": {
+                "id": job.id,
+                "status": job.status.value,
+                "backend": job.backend,
+                "task_type": job.task_type,
+                "attempts": {"current": job.attempt_count, "max": job.max_attempts},
+                "next_retry_at": job.next_retry_at.isoformat() if job.next_retry_at else None,
+                "last_error_code": job.last_error_code,
+                "last_error_message": job.last_error_message,
+                "workspace_path": job.workspace_path,
+                "metadata": job.metadata,
+            },
+            "state": {
+                "compact_summary": details.state.compact_summary,
+                "tool_context": details.state.tool_context,
+                "last_checkpoint_at": details.state.last_checkpoint_at.isoformat()
+                if details.state.last_checkpoint_at
+                else None,
+            },
+            "runs": [
+                {
+                    "id": run.id,
+                    "started_at": run.started_at.isoformat(),
+                    "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+                    "usage": run.usage,
+                    "exit_reason": run.exit_reason,
+                    "response_summary": run.response_summary,
+                    "error": run.error,
+                }
+                for run in details.runs[-5:]
+            ],
+            "events": [
+                {
+                    "timestamp": event.timestamp.isoformat(),
+                    "event_type": event.event_type,
+                    "detail": event.detail,
+                }
+                for event in details.events[-15:]
+            ],
+            "artifacts": [
+                {
+                    "created_at": artifact.created_at.isoformat(),
+                    "kind": artifact.kind,
+                    "path": artifact.path,
+                    "metadata": artifact.metadata,
+                }
+                for artifact in details.artifacts
+            ],
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+            return
         typer.echo(f"job {job.id}")
         typer.echo(f"  status: {job.status.value}")
         typer.echo(f"  backend: {job.backend}")
+        typer.echo(f"  task_type: {job.task_type}")
         typer.echo(f"  attempts: {job.attempt_count}/{job.max_attempts}")
         typer.echo(f"  next_retry_at: {job.next_retry_at}")
+        typer.echo(f"  followup: {job.metadata.get('followup_type') or job.metadata.get('resume_hint') or 'n/a'}")
         typer.echo(f"  last_error: {job.last_error_code} {job.last_error_message}")
         typer.echo(f"  workspace: {job.workspace_path}")
+        typer.echo(f"  compact_summary: {details.state.compact_summary or 'n/a'}")
+        typer.echo(f"  tool_context: {json.dumps(details.state.tool_context)}")
+        if details.runs:
+            last_run = details.runs[-1]
+            typer.echo("  last run:")
+            typer.echo(f"    exit_reason: {last_run.exit_reason}")
+            typer.echo(f"    usage: {json.dumps(last_run.usage)}")
+            typer.echo(f"    response: {json.dumps(last_run.response_summary)}")
         typer.echo("  recent events:")
         for event in details.events[-10:]:
             typer.echo(f"    - {event.timestamp.isoformat()} {event.event_type} {json.dumps(event.detail)}")
@@ -167,7 +231,8 @@ if typer is not None:  # pragma: no branch
         for job in jobs:
             typer.echo(
                 f"{job.id} {job.status.value:13} backend={job.backend:16} "
-                f"priority={job.priority:3} attempts={job.attempt_count}/{job.max_attempts}"
+                f"priority={job.priority:3} attempts={job.attempt_count}/{job.max_attempts} "
+                f"followup={job.metadata.get('followup_type') or job.metadata.get('resume_hint') or '-'}"
             )
 
     @app.command("purge-completed")
@@ -209,8 +274,11 @@ if typer is not None:  # pragma: no branch
         orchestrator, _ = _build_services(config)
         typer.echo(f"sqlite: {orchestrator.config.sqlite_path(Path.cwd())}")
         typer.echo(f"default backend: {orchestrator.config.default_backend}")
+        typer.echo(f"enabled backends: {', '.join(sorted(orchestrator.backends))}")
         typer.echo(f"workspace root: {orchestrator.config.workspace_path(Path.cwd())}")
         typer.echo(f"privacy mode: {orchestrator.config.privacy.enabled}")
+        typer.echo(f"lease seconds: {orchestrator.config.effective_lease_seconds()}")
+        typer.echo(f"heartbeat interval: {orchestrator.config.worker.heartbeat_interval_seconds}")
 
 else:
     app = None

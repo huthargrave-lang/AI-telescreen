@@ -24,3 +24,15 @@ def test_duplicate_execution_is_prevented(tmp_path):
     assert first_claim is not None
     assert second_claim is None
     assert repository.get_job(job.id).attempt_count == 1
+
+
+def test_lease_renewal_requires_current_owner(tmp_path):
+    orchestrator, repository, config = build_test_orchestrator(tmp_path)
+    config.worker.lease_seconds = 5
+    job = create_job(orchestrator)
+
+    claimed = repository.claim_job(job.id, "worker-1", lease_seconds=config.effective_lease_seconds())
+    assert claimed is not None
+
+    assert repository.renew_job_lease(job.id, "worker-2", lease_seconds=config.effective_lease_seconds()) is None
+    assert repository.renew_job_lease(job.id, "worker-1", lease_seconds=config.effective_lease_seconds()) is not None

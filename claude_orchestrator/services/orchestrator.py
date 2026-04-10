@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 from ..config import AppConfig
 from ..models import (
@@ -20,7 +21,7 @@ from ..models import (
     RetryDisposition,
 )
 from ..repository import JobRepository
-from ..retry import RetryPolicy, UserCancelledError
+from ..retry import RetryPolicy, RetryableBackendError, UserCancelledError
 from ..timeutils import utcnow
 from ..workspaces import ensure_job_workspace, store_private_prompt, store_response_artifact
 from ..backends.base import BackendAdapter, BatchCapableBackend, BackendContext
@@ -35,6 +36,74 @@ class JobInspection:
     runs: List[Any]
     events: List[Any]
     artifacts: List[ArtifactRecord]
+
+
+class LeaseHeartbeat:
+    """Background lease renewer for long-running jobs."""
+
+    def __init__(
+        self,
+        repository: JobRepository,
+        *,
+        job_id: str,
+        worker_id: str,
+        lease_seconds: int,
+        heartbeat_interval_seconds: int,
+    ) -> None:
+        self.repository = repository
+        self.job_id = job_id
+        self.worker_id = worker_id
+        self.lease_seconds = lease_seconds
+        self.heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._task: Optional[asyncio.Task[None]] = None
+        self._stop_event = asyncio.Event()
+        self.lost_lease = False
+
+    def start(self) -> None:
+        if self._task is not None or self.heartbeat_interval_seconds <= 0:
+            return
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        self._stop_event.set()
+        if self._task is None:
+            return
+        try:
+            await self._task
+        finally:
+            self._task = None
+
+    async def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=self.heartbeat_interval_seconds,
+                )
+                break
+            except asyncio.TimeoutError:
+                renewed_until = self.repository.renew_job_lease(
+                    self.job_id,
+                    self.worker_id,
+                    self.lease_seconds,
+                )
+                if renewed_until is None:
+                    self.lost_lease = True
+                    logger.warning(
+                        "job.lease.heartbeat_lost",
+                        extra={"context": {"job_id": self.job_id, "worker_id": self.worker_id}},
+                    )
+                    return
+                logger.debug(
+                    "job.lease.heartbeat_renewed",
+                    extra={
+                        "context": {
+                            "job_id": self.job_id,
+                            "worker_id": self.worker_id,
+                            "lease_expires_at": renewed_until.isoformat(),
+                        }
+                    },
+                )
 
 
 class OrchestratorService:
@@ -104,7 +173,12 @@ class OrchestratorService:
         return self.repository.get_status_counts()
 
     def list_jobs(self, *, status: Optional[str] = None, backend: Optional[str] = None, limit: int = 100) -> List[Job]:
-        return self.repository.list_jobs(status=status, backend=backend, limit=limit)
+        return self.repository.list_jobs(
+            status=status,
+            backend=backend,
+            limit=limit,
+            continuation_priority_bonus=self.config.worker.continuation_priority_bonus,
+        )
 
     def inspect(self, job_id: str) -> JobInspection:
         return JobInspection(
@@ -134,9 +208,22 @@ class OrchestratorService:
         return len(payload)
 
     def recover_stale_jobs(self) -> List[str]:
-        stale_before = utcnow() - timedelta(seconds=self.config.worker.stale_after_seconds)
+        stale_before = utcnow()
         recovered: List[str] = []
         for job in self.repository.recover_stale_running_jobs(stale_before):
+            if job.backend not in self.backends:
+                self.repository.update_job_status(
+                    job.id,
+                    target_status=JobStatus.FAILED,
+                    current_status=JobStatus.RUNNING,
+                    last_error_code="backend_disabled",
+                    last_error_message=f"Backend {job.backend} is not currently enabled.",
+                    clear_cancel=True,
+                    event_type="job.recovery.failed",
+                    event_detail={"reason": "backend_disabled"},
+                )
+                recovered.append(job.id)
+                continue
             state = self.repository.get_conversation_state(job.id)
             backend = self._get_backend(job.backend)
             if backend.can_resume(job, state):
@@ -145,8 +232,9 @@ class OrchestratorService:
                     target_status=JobStatus.QUEUED,
                     current_status=JobStatus.RUNNING,
                     clear_cancel=True,
-                    event_type="stale_job_recovered",
+                    event_type="job.recovery.requeued",
                     event_detail={"action": "resume", "reason": "startup_recovery"},
+                    metadata_updates={"resume_hint": "recoverable_resume"},
                 )
             else:
                 decision = self.retry_policy.schedule_retry(
@@ -165,12 +253,13 @@ class OrchestratorService:
                     last_error_code=decision.error_code,
                     last_error_message=decision.error_message,
                     clear_cancel=True,
-                    event_type="stale_job_recovered",
+                    event_type="job.recovery.retry_scheduled",
                     event_detail={
                         "action": "retry",
                         "reason": decision.reason,
                         "retry_at": decision.retry_at.isoformat() if decision.retry_at else None,
                     },
+                    metadata_remove_keys=("resume_hint",),
                 )
             recovered.append(job.id)
         return recovered
@@ -183,18 +272,30 @@ class OrchestratorService:
             workspace_root=self.config.workspace_path(self.root),
             worker_id=worker_id,
         )
+        heartbeat = LeaseHeartbeat(
+            self.repository,
+            job_id=job.id,
+            worker_id=worker_id,
+            lease_seconds=self.config.effective_lease_seconds(),
+            heartbeat_interval_seconds=self.config.worker.heartbeat_interval_seconds,
+        )
         run_id: Optional[str] = None
         request_payload: Dict[str, Any] = {}
         try:
             run_id = self.repository.record_run_start(job, request_payload={"status": "starting"})
             if job.cancel_requested:
                 raise UserCancelledError("Cancellation requested before execution started.")
-            if backend.can_resume(job, state) and state.tool_context.get("pending_followup"):
-                result = await backend.continue_job(job, state, context)
-            elif backend.can_resume(job, state) and job.attempt_count > 1:
+            heartbeat.start()
+            logger.info(
+                "job.execution.started",
+                extra={"context": {"job_id": job.id, "backend": job.backend, "worker_id": worker_id}},
+            )
+            if self._should_continue_job(job, state, backend):
                 result = await backend.continue_job(job, state, context)
             else:
                 result = await backend.submit(job, state, context)
+            if heartbeat.lost_lease:
+                raise RetryableBackendError("Lost job lease during execution; reschedule for safe recovery.")
             request_payload = result.request_payload
             self._persist_success(job, result)
             self.repository.finish_run(
@@ -206,8 +307,35 @@ class OrchestratorService:
                 error=result.error,
                 exit_reason=result.exit_reason,
             )
+            logger.info(
+                "job.execution.completed",
+                extra={"context": {"job_id": job.id, "backend": job.backend, "status": result.status.value}},
+            )
             return self.repository.get_job(job.id)
+        except asyncio.CancelledError:
+            await heartbeat.stop()
+            self._persist_interrupted(job, reason="worker_shutdown_interrupted")
+            if run_id is not None:
+                self.repository.finish_run(
+                    run_id,
+                    request_payload=request_payload,
+                    response_summary={},
+                    usage={},
+                    headers={},
+                    error={
+                        "type": "CancelledError",
+                        "message": "Job execution interrupted during worker shutdown.",
+                        "reason": "worker_shutdown_interrupted",
+                    },
+                    exit_reason="worker_shutdown_interrupted",
+                )
+            logger.warning(
+                "job.execution.interrupted",
+                extra={"context": {"job_id": job.id, "backend": job.backend, "worker_id": worker_id}},
+            )
+            raise
         except Exception as error:
+            await heartbeat.stop()
             setattr(error, "_job_attempt_count", job.attempt_count)
             setattr(error, "_job_max_attempts", job.max_attempts)
             decision = backend.classify_error(error)
@@ -227,10 +355,14 @@ class OrchestratorService:
                     exit_reason=decision.reason,
                 )
             return self.repository.get_job(job.id)
+        finally:
+            await heartbeat.stop()
 
     async def submit_message_batch(self, jobs: Sequence[Job], worker_id: str) -> List[Job]:
         if not jobs:
             return []
+        if "message_batches" not in self.backends:
+            raise KeyError("message_batches backend is not enabled.")
         backend = self._get_backend("message_batches")
         if not isinstance(backend, BatchCapableBackend):
             raise TypeError("message_batches backend does not implement batch submission.")
@@ -240,7 +372,12 @@ class OrchestratorService:
             worker_id=worker_id,
         )
         states = [(job, self.repository.get_conversation_state(job.id)) for job in jobs]
-        submission = await backend.submit_batch(states, context)
+        try:
+            submission = await backend.submit_batch(states, context)
+        except asyncio.CancelledError:
+            for job in jobs:
+                self._persist_interrupted(job, reason="worker_shutdown_interrupted", expected_status=JobStatus.RUNNING)
+            raise
         batch_record_id = self.repository.create_batch_record(
             backend="message_batches",
             upstream_batch_id=submission.upstream_batch_id,
@@ -253,15 +390,6 @@ class OrchestratorService:
         due_at = utcnow() + timedelta(seconds=self.config.backends.message_batches.poll_interval_seconds)
         for custom_id, job_id in submission.custom_id_map.items():
             job = self.repository.get_job(job_id)
-            metadata = dict(job.metadata)
-            metadata.update(
-                {
-                    "batch_record_id": batch_record_id,
-                    "upstream_batch_id": submission.upstream_batch_id,
-                    "batch_custom_id": custom_id,
-                }
-            )
-            self.repository.set_job_metadata(job_id, metadata)
             self.repository.update_job_status(
                 job_id,
                 target_status=JobStatus.WAITING_RETRY,
@@ -274,6 +402,11 @@ class OrchestratorService:
                     "upstream_batch_id": submission.upstream_batch_id,
                     "custom_id": custom_id,
                     "next_poll_at": due_at.isoformat(),
+                },
+                metadata_updates={
+                    "batch_record_id": batch_record_id,
+                    "upstream_batch_id": submission.upstream_batch_id,
+                    "batch_custom_id": custom_id,
                 },
             )
             run_id = self.repository.record_run_start(job, request_payload=submission.request_payload)
@@ -292,6 +425,8 @@ class OrchestratorService:
         return [self.repository.get_job(job.id) for job in jobs]
 
     async def poll_open_batches(self, worker_id: str) -> int:
+        if "message_batches" not in self.backends:
+            return 0
         backend = self._get_backend("message_batches")
         if not isinstance(backend, BatchCapableBackend):
             return 0
@@ -412,8 +547,9 @@ class OrchestratorService:
                 target_status=JobStatus.CANCELLED,
                 current_status=latest_job.status,
                 clear_cancel=True,
-                event_type="job_cancelled",
+                event_type="job.execution.cancelled",
                 event_detail={"reason": "cancel_requested_while_running"},
+                metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
             return
         if result.status == JobStatus.COMPLETED:
@@ -424,13 +560,15 @@ class OrchestratorService:
                 clear_cancel=True,
                 last_error_code=None,
                 last_error_message=None,
-                event_type="job_completed",
+                event_type="job.execution.completed",
                 event_detail={
                     "needs_followup": result.needs_followup,
                     "followup_reason": result.followup_reason,
                 },
+                metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
         elif result.status == JobStatus.QUEUED:
+            metadata_updates, metadata_remove_keys = self._followup_metadata(job, result)
             self.repository.update_job_status(
                 job.id,
                 target_status=JobStatus.QUEUED,
@@ -438,8 +576,10 @@ class OrchestratorService:
                 clear_cancel=True,
                 last_error_code=None,
                 last_error_message=None,
-                event_type="job_followup_scheduled",
+                event_type="job.followup.scheduled",
                 event_detail={"followup_reason": result.followup_reason},
+                metadata_updates=metadata_updates,
+                metadata_remove_keys=metadata_remove_keys,
             )
         elif result.status == JobStatus.WAITING_RETRY:
             self.repository.update_job_status(
@@ -448,8 +588,9 @@ class OrchestratorService:
                 current_status=expected_status,
                 next_retry_at=utcnow() + timedelta(seconds=self.config.worker.poll_interval_seconds),
                 clear_cancel=True,
-                event_type="job_waiting_retry",
+                event_type="job.retry.waiting",
                 event_detail={"followup_reason": result.followup_reason},
+                metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
         else:
             self.repository.update_job_status(
@@ -457,8 +598,9 @@ class OrchestratorService:
                 target_status=result.status,
                 current_status=expected_status,
                 clear_cancel=True,
-                event_type="job_state_changed",
+                event_type="job.state.changed",
                 event_detail={"target_status": result.status.value},
+                metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
 
     def _persist_failure(
@@ -470,7 +612,7 @@ class OrchestratorService:
         expected_status: JobStatus = JobStatus.RUNNING,
     ) -> None:
         logger.error(
-            "job_execution_failed",
+            "job.execution.failed",
             extra={
                 "context": {
                     "job_id": job.id,
@@ -489,13 +631,14 @@ class OrchestratorService:
                 last_error_code=decision.error_code,
                 last_error_message=decision.error_message,
                 clear_cancel=True,
-                event_type="job_retry_scheduled",
+                event_type="job.retry.scheduled",
                 event_detail={
                     "reason": decision.reason,
                     "retry_at": decision.retry_at.isoformat() if decision.retry_at else None,
                     "retry_after_seconds": decision.retry_after_seconds,
                     "headers": decision.headers,
                 },
+                metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
         elif decision.disposition == RetryDisposition.CANCEL:
             self.repository.update_job_status(
@@ -505,8 +648,9 @@ class OrchestratorService:
                 last_error_code=decision.error_code,
                 last_error_message=decision.error_message,
                 clear_cancel=True,
-                event_type="job_cancelled",
+                event_type="job.execution.cancelled",
                 event_detail={"reason": decision.reason},
+                metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
         else:
             self.repository.update_job_status(
@@ -516,9 +660,74 @@ class OrchestratorService:
                 last_error_code=decision.error_code,
                 last_error_message=decision.error_message,
                 clear_cancel=True,
-                event_type="job_failed",
+                event_type="job.execution.failed_final",
                 event_detail={"reason": decision.reason, "headers": decision.headers},
+                metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
+
+    def _persist_interrupted(
+        self,
+        job: Job,
+        *,
+        reason: str,
+        expected_status: JobStatus = JobStatus.RUNNING,
+    ) -> None:
+        decision = self.retry_policy.schedule_retry(
+            max(job.attempt_count, 1),
+            now=utcnow(),
+            reason=reason,
+            error_code="worker_shutdown",
+            error_message="Worker shutdown interrupted job execution.",
+            headers={},
+        )
+        self.repository.update_job_status(
+            job.id,
+            target_status=JobStatus.WAITING_RETRY,
+            current_status=expected_status,
+            next_retry_at=decision.retry_at,
+            last_error_code=decision.error_code,
+            last_error_message=decision.error_message,
+            clear_cancel=True,
+            event_type="job.execution.interrupted",
+            event_detail={
+                "reason": reason,
+                "retry_at": decision.retry_at.isoformat() if decision.retry_at else None,
+            },
+            metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
+        )
+
+    def _followup_metadata(self, job: Job, result: BackendResult) -> tuple[Dict[str, Any], Sequence[str]]:
+        if result.followup_reason == "max_tokens":
+            return (
+                {
+                    "followup_type": "model_continuation",
+                    "followup_reason": result.followup_reason,
+                    "followup_requested_at": utcnow().isoformat(),
+                },
+                ("resume_hint",),
+            )
+        if result.followup_reason:
+            return (
+                {"resume_hint": result.followup_reason},
+                ("followup_type", "followup_reason", "followup_requested_at"),
+            )
+        return ({}, ("followup_type", "followup_reason", "followup_requested_at", "resume_hint"))
+
+    def _should_continue_job(
+        self,
+        job: Job,
+        state: ConversationState,
+        backend: BackendAdapter,
+    ) -> bool:
+        if not backend.can_resume(job, state):
+            return False
+        followup_type = job.metadata.get("followup_type")
+        resume_hint = job.metadata.get("resume_hint")
+        if followup_type == "model_continuation":
+            return True
+        if resume_hint in {"recoverable_resume", "checkpoint_available"}:
+            return True
+        return bool(state.tool_context.get("pending_followup"))
 
     def _get_backend(self, backend_name: str) -> BackendAdapter:
         backend = self.backends.get(backend_name)

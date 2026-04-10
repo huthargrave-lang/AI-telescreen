@@ -19,7 +19,12 @@ sqlite_path = "data/claude-orchestrator.db"
 [worker]
 max_concurrency = 4
 poll_interval_seconds = 5
+lease_seconds = 300
 stale_after_seconds = 300
+heartbeat_interval_seconds = 60
+shutdown_drain_timeout_seconds = 30
+shutdown_poll_interval_seconds = 0.2
+continuation_priority_bonus = 1000
 max_batch_group_size = 25
 
 [worker.per_backend_concurrency]
@@ -43,6 +48,10 @@ api_key_env = "ANTHROPIC_API_KEY"
 model = "claude-3-5-sonnet-latest"
 max_tokens = 2048
 timeout_seconds = 120
+compaction_message_threshold = 12
+compaction_keep_recent_messages = 6
+compaction_char_threshold = 16000
+compaction_summary_char_limit = 4000
 
 [backends.message_batches]
 enabled = true
@@ -63,4 +72,9 @@ executable = "claude"
 command_template = []
 auth_check_command = []
 hook_commands = []
+allow_hooks = false
+allowed_hook_executables = []
 timeout_seconds = 1800
+hook_timeout_seconds = 30
+max_output_bytes = 1048576
+preview_characters = 500

@@ -21,22 +21,41 @@ class GuardrailViolation:
 
 
 FORBIDDEN_PATTERNS: Sequence[GuardrailViolation] = (
-    GuardrailViolation(r"claude\.ai", "Consumer website references are disallowed in implementation flows."),
-    GuardrailViolation(r"playwright", "Browser automation against Claude.ai is forbidden."),
-    GuardrailViolation(r"puppeteer", "Browser automation against Claude.ai is forbidden."),
-    GuardrailViolation(r"selenium", "Browser automation against Claude.ai is forbidden."),
-    GuardrailViolation(r"cookie", "Consumer-site cookie reuse is forbidden."),
-    GuardrailViolation(r"localstorage", "Consumer-site storage reuse is forbidden."),
-    GuardrailViolation(r"session[-_ ]limit", "Consumer session counter inspection is out of scope."),
-    GuardrailViolation(r"devtools", "Browser devtools interception is forbidden."),
-    GuardrailViolation(r"intercept(?:ing)? private", "Private endpoint interception is forbidden."),
+    GuardrailViolation(
+        r"(?:^|\n)\s*(?:from|import)\s+playwright\b|playwright\.(?:sync_api|async_api)|page\.goto\([^)]*claude\.ai",
+        "Browser automation against Claude.ai is forbidden.",
+    ),
+    GuardrailViolation(
+        r"(?:^|\n)\s*(?:from|import)\s+selenium\b|webdriver\.[A-Za-z_]+|selenium\.webdriver",
+        "Browser automation against Claude.ai is forbidden.",
+    ),
+    GuardrailViolation(
+        r"puppeteer(?:\.launch|\s*=|require\()|page\.goto\([^)]*claude\.ai",
+        "Browser automation against Claude.ai is forbidden.",
+    ),
+    GuardrailViolation(
+        r"(?:requests|httpx)\.(?:get|post|put|patch|delete)\([^)]*claude\.ai|client\.(?:get|post|put|patch|delete)\([^)]*claude\.ai",
+        "Direct HTTP access to the Claude consumer site is forbidden.",
+    ),
+    GuardrailViolation(
+        r"(?:document\.cookie|browser_cookie3|cookiejar|localstorage|sessionstorage)",
+        "Consumer-site credential or storage reuse is forbidden.",
+    ),
+    GuardrailViolation(
+        r"(?:devtools|cdp|network\.intercept|chrome\.debugger|intercept(?:ing)? private)",
+        "Browser interception and private endpoint reverse engineering are forbidden.",
+    ),
+    GuardrailViolation(
+        r"(?:scrape|read|watch|inspect|parse)[^\n]{0,80}session[-_ ]limit|session[-_ ]limit[^\n]{0,80}(?:scrape|read|watch|inspect|parse)",
+        "Consumer session counter inspection is out of scope.",
+    ),
 )
 
 
 def find_violations(text: str) -> List[GuardrailViolation]:
     """Return forbidden-pattern matches in the supplied text."""
 
-    lowered = text.lower()
+    lowered = _executable_text(text.lower())
     return [rule for rule in FORBIDDEN_PATTERNS if re.search(rule.pattern, lowered)]
 
 
@@ -60,3 +79,17 @@ def scan_paths(paths: Iterable[Path]) -> List[str]:
             reasons = ", ".join(sorted({violation.reason for violation in violations}))
             findings.append(f"{path}: {reasons}")
     return findings
+
+
+def _executable_text(text: str) -> str:
+    """Reduce false positives by ignoring obviously narrative or comment-only lines."""
+
+    lines = []
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(("#", "//", "*", "-", ">", '"""', "'''")):
+            continue
+        lines.append(raw_line)
+    return "\n".join(lines)

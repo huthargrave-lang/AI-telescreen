@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -40,6 +41,54 @@ class CompletedBackend:
             disposition=RetryDisposition.FAIL,
             reason="fake_failure",
             error_code="fake_failure",
+            error_message=str(error),
+        )
+
+    def can_resume(self, job, state):
+        return False
+
+
+class SleepBackend:
+    name = "messages_api"
+
+    def __init__(self, delay_seconds: float, *, result_status: JobStatus = JobStatus.COMPLETED) -> None:
+        self.delay_seconds = delay_seconds
+        self.result_status = result_status
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def submit(self, job, state, context):
+        self.started.set()
+        try:
+            await asyncio.sleep(self.delay_seconds)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        updated_state = ConversationState(
+            job_id=job.id,
+            system_prompt=state.system_prompt,
+            message_history=state.message_history + [{"role": "assistant", "content": "slept"}],
+            compact_summary="slept",
+            tool_context=dict(state.tool_context),
+            last_checkpoint_at=utcnow(),
+        )
+        return BackendResult(
+            status=self.result_status,
+            output="slept",
+            updated_state=updated_state,
+            request_payload={"job_id": job.id},
+            response_summary={"summary": "slept"},
+            exit_reason="completed",
+        )
+
+    async def continue_job(self, job, state, context):
+        return await self.submit(job, state, context)
+
+    def classify_error(self, error, headers=None):
+        return RetryDecision(
+            disposition=RetryDisposition.RETRY,
+            reason="sleep_backend_error",
+            error_code="sleep_backend_error",
             error_message=str(error),
         )
 

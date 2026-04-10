@@ -38,6 +38,12 @@ def _loads_list(value: Optional[str]) -> List[Dict[str, Any]]:
     return json.loads(value)
 
 
+def _followup_priority(metadata: Dict[str, Any], continuation_priority_bonus: int) -> int:
+    if metadata.get("followup_type") == "model_continuation":
+        return continuation_priority_bonus
+    return 0
+
+
 class JobRepository:
     """Repository with the durable operations needed by the orchestrator."""
 
@@ -171,6 +177,7 @@ class JobRepository:
         status: Optional[str] = None,
         backend: Optional[str] = None,
         limit: int = 100,
+        continuation_priority_bonus: int = 0,
     ) -> List[Job]:
         clauses: List[str] = []
         params: List[Any] = []
@@ -201,7 +208,18 @@ class JobRepository:
                 """,
                 (*params, limit),
             ).fetchall()
-        return [self._row_to_job(row) for row in rows]
+        jobs = [self._row_to_job(row) for row in rows]
+        return sorted(
+            jobs,
+            key=lambda job: (
+                0 if job.status == JobStatus.RUNNING else 1,
+                -(
+                    job.priority
+                    + _followup_priority(job.metadata, continuation_priority_bonus)
+                ),
+                to_iso8601(job.created_at) or "",
+            ),
+        )[:limit]
 
     def get_status_counts(self) -> Dict[str, int]:
         with self.db.connect() as connection:
@@ -254,7 +272,7 @@ class JobRepository:
                 ),
             )
 
-    def claim_job(self, job_id: str, worker_id: str, lease_seconds: int = 300) -> Optional[Job]:
+    def claim_job(self, job_id: str, worker_id: str, lease_seconds: float = 300) -> Optional[Job]:
         now = utcnow()
         expires_at = now + timedelta(seconds=lease_seconds)
         with self.db.connect() as connection:
@@ -301,7 +319,36 @@ class JobRepository:
             )
         return self.get_job(job_id)
 
-    def list_runnable_jobs(self, limit: int = 100) -> List[Job]:
+    def renew_job_lease(self, job_id: str, worker_id: str, lease_seconds: float) -> Optional[datetime]:
+        """Renew a running-job lease only if the current worker still owns it."""
+
+        now = utcnow()
+        expires_at = now + timedelta(seconds=lease_seconds)
+        with self.db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                """
+                UPDATE jobs
+                SET
+                    updated_at = ?,
+                    lease_expires_at = ?
+                WHERE id = ?
+                  AND status = ?
+                  AND lease_owner = ?
+                """,
+                (
+                    to_iso8601(now),
+                    to_iso8601(expires_at),
+                    job_id,
+                    JobStatus.RUNNING.value,
+                    worker_id,
+                ),
+            )
+        if updated.rowcount != 1:
+            return None
+        return expires_at
+
+    def list_runnable_jobs(self, limit: int = 100, continuation_priority_bonus: int = 0) -> List[Job]:
         now = utcnow()
         with self.db.connect() as connection:
             rows = connection.execute(
@@ -312,9 +359,19 @@ class JobRepository:
                 ORDER BY priority DESC, created_at ASC
                 LIMIT ?
                 """,
-                (JobStatus.QUEUED.value, to_iso8601(now), limit),
+                (JobStatus.QUEUED.value, to_iso8601(now), max(limit * 10, 100)),
             ).fetchall()
-        return [self._row_to_job(row) for row in rows]
+        jobs = [self._row_to_job(row) for row in rows]
+        return sorted(
+            jobs,
+            key=lambda job: (
+                -(
+                    job.priority
+                    + _followup_priority(job.metadata, continuation_priority_bonus)
+                ),
+                to_iso8601(job.created_at) or "",
+            ),
+        )[:limit]
 
     def record_run_start(self, job: Job, request_payload: Dict[str, Any]) -> str:
         run_id = str(uuid.uuid4())
@@ -403,12 +460,19 @@ class JobRepository:
         clear_cancel: bool = False,
         event_type: Optional[str] = None,
         event_detail: Optional[Dict[str, Any]] = None,
+        metadata_updates: Optional[Dict[str, Any]] = None,
+        metadata_remove_keys: Optional[Sequence[str]] = None,
     ) -> None:
         job = self.get_job(job_id)
         if current_status is not None and job.status != current_status:
             raise ValueError(f"Expected {current_status.value}, got {job.status.value}")
         ensure_transition(job.status, target_status)
         now = utcnow()
+        updated_metadata = dict(job.metadata)
+        for key in metadata_remove_keys or ():
+            updated_metadata.pop(key, None)
+        for key, value in (metadata_updates or {}).items():
+            updated_metadata[key] = value
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -420,6 +484,7 @@ class JobRepository:
                     next_retry_at = ?,
                     last_error_code = ?,
                     last_error_message = ?,
+                    metadata_json = ?,
                     lease_owner = ?,
                     lease_expires_at = ?,
                     cancel_requested = CASE WHEN ? THEN 0 ELSE cancel_requested END
@@ -431,6 +496,7 @@ class JobRepository:
                     to_iso8601(next_retry_at),
                     last_error_code,
                     last_error_message,
+                    _dumps(updated_metadata),
                     None if clear_lease else job.lease_owner,
                     None if clear_lease else to_iso8601(job.lease_expires_at),
                     1 if clear_cancel else 0,
@@ -455,16 +521,19 @@ class JobRepository:
     def request_cancel(self, job_id: str, reason: str = "cancelled_by_operator") -> Job:
         job = self.get_job(job_id)
         now = utcnow()
+        updated_metadata = dict(job.metadata)
+        for key in ("followup_type", "followup_reason", "followup_requested_at", "resume_hint"):
+            updated_metadata.pop(key, None)
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             if job.status == JobStatus.RUNNING:
                 connection.execute(
                     """
                     UPDATE jobs
-                    SET cancel_requested = 1, updated_at = ?
+                    SET cancel_requested = 1, updated_at = ?, metadata_json = ?
                     WHERE id = ?
                     """,
-                    (to_iso8601(now), job_id),
+                    (to_iso8601(now), _dumps(updated_metadata), job_id),
                 )
                 connection.execute(
                     """
@@ -484,10 +553,10 @@ class JobRepository:
                 connection.execute(
                     """
                     UPDATE jobs
-                    SET status = ?, updated_at = ?, next_retry_at = NULL
+                    SET status = ?, updated_at = ?, next_retry_at = NULL, metadata_json = ?
                     WHERE id = ?
                     """,
-                    (JobStatus.CANCELLED.value, to_iso8601(now), job_id),
+                    (JobStatus.CANCELLED.value, to_iso8601(now), _dumps(updated_metadata), job_id),
                 )
                 connection.execute(
                     """
@@ -509,6 +578,9 @@ class JobRepository:
         if job.status not in {JobStatus.FAILED, JobStatus.WAITING_RETRY}:
             raise ValueError(f"Job {job_id} cannot be retried from status {job.status.value}")
         now = utcnow()
+        updated_metadata = dict(job.metadata)
+        for key in ("followup_type", "followup_reason", "followup_requested_at", "resume_hint"):
+            updated_metadata.pop(key, None)
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             ensure_transition(job.status, JobStatus.QUEUED)
@@ -521,12 +593,14 @@ class JobRepository:
                     next_retry_at = NULL,
                     last_error_code = NULL,
                     last_error_message = NULL,
+                    metadata_json = ?,
                     cancel_requested = 0
                 WHERE id = ?
                 """,
                 (
                     JobStatus.QUEUED.value,
                     to_iso8601(now),
+                    _dumps(updated_metadata),
                     job_id,
                 ),
             )

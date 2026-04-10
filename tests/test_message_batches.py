@@ -10,6 +10,7 @@ class FakeBatchesApi:
     def __init__(self):
         self.requests = []
         self.custom_ids = []
+        self.retrieve_calls = 0
 
     async def create(self, requests):
         self.requests.append(requests)
@@ -18,26 +19,43 @@ class FakeBatchesApi:
 
     async def retrieve(self, upstream_batch_id):
         assert upstream_batch_id == "batch-upstream-1"
+        self.retrieve_calls += 1
+        if self.retrieve_calls == 1:
+            return {
+                "status": "in_progress",
+                "results": [
+                    {
+                        "custom_id": self.custom_ids[0],
+                        "result": {
+                            "message": {
+                                "content": [{"type": "text", "text": "ok"}],
+                                "usage": {"input_tokens": 1, "output_tokens": 2},
+                                "stop_reason": "end_turn",
+                            }
+                        },
+                    },
+                    {
+                        "custom_id": self.custom_ids[1],
+                        "result": {
+                            "type": "error",
+                            "error": "boom",
+                        },
+                    },
+                ],
+            }
         return {
-            "status": "in_progress",
+            "status": "completed",
             "results": [
                 {
-                    "custom_id": self.custom_ids[0],
+                    "custom_id": self.custom_ids[2],
                     "result": {
                         "message": {
-                            "content": [{"type": "text", "text": "ok"}],
-                            "usage": {"input_tokens": 1, "output_tokens": 2},
+                            "content": [{"type": "text", "text": "later ok"}],
+                            "usage": {"input_tokens": 2, "output_tokens": 3},
                             "stop_reason": "end_turn",
                         }
                     },
-                },
-                {
-                    "custom_id": self.custom_ids[1],
-                    "result": {
-                        "type": "error",
-                        "error": "boom",
-                    },
-                },
+                }
             ],
         }
 
@@ -69,7 +87,10 @@ def test_partial_batch_results_fan_back_into_individual_jobs(tmp_path):
 
     asyncio.run(orchestrator.submit_message_batch([job for job in claimed_jobs if job is not None], "worker-1"))
     asyncio.run(orchestrator.poll_open_batches("worker-1"))
+    assert repository.get_job(job_three.id).status.value == "waiting_retry"
+
+    asyncio.run(orchestrator.poll_open_batches("worker-1"))
 
     assert repository.get_job(job_one.id).status.value == "completed"
     assert repository.get_job(job_two.id).status.value == "failed"
-    assert repository.get_job(job_three.id).status.value == "waiting_retry"
+    assert repository.get_job(job_three.id).status.value == "completed"

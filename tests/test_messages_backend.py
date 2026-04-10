@@ -103,6 +103,47 @@ def test_messages_backend_requests_followup_after_max_tokens(tmp_path):
     assert fake_client.messages.calls[0]["messages"][0]["content"] == "hello"
 
 
+def test_messages_backend_compacts_history_into_system_summary(tmp_path):
+    parsed = FakeParsedResponse(
+        content=[FakeContent(type="text", text="done")],
+        stop_reason="end_turn",
+        model="test-model",
+        usage={"input_tokens": 10, "output_tokens": 20},
+    )
+    fake_client = FakeClient(FakeRawResponse(parsed))
+    config = AppConfig()
+    config.backends.messages_api.compaction_message_threshold = 4
+    config.backends.messages_api.compaction_keep_recent_messages = 2
+    backend = MessagesApiBackend(config, client_factory=lambda: fake_client)
+    state = ConversationState(
+        job_id="job-1",
+        system_prompt="Be helpful.",
+        compact_summary="Older summary",
+        message_history=[
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+            {"role": "user", "content": "three"},
+            {"role": "assistant", "content": "four"},
+            {"role": "user", "content": "five"},
+            {"role": "assistant", "content": "six"},
+        ],
+    )
+    context = type(
+        "Context",
+        (),
+        {"config": config, "workspace_root": ensure_job_workspace(tmp_path, "job-1").parent, "worker_id": "worker-1"},
+    )()
+
+    result = asyncio.run(backend.continue_job(_job(), state, context))
+
+    request = fake_client.messages.calls[0]
+    assert "Conversation summary from earlier turns" in request["system"]
+    assert len(request["messages"]) == 2
+    assert request["messages"][-1]["content"].startswith("Continue from the previous checkpoint")
+    assert len(result.updated_state.message_history) <= 3
+    assert "Older summary" in (result.updated_state.compact_summary or "")
+
+
 def test_messages_backend_classifies_429_retry_after():
     backend = MessagesApiBackend(AppConfig(), client_factory=lambda: object())
     error = FakeApiError(

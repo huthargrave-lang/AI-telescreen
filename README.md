@@ -24,7 +24,7 @@ The codebase is one-language Python and splits responsibilities cleanly:
 
 ### `messages_api`
 
-Default backend for direct Anthropic API requests. The backend treats the upstream API as stateless and stores conversation history, summaries, and retry metadata locally so jobs can continue after restarts.
+Default backend for direct Anthropic API requests. The backend treats the upstream API as stateless, stores conversation history locally, compacts older turns into `compact_summary`, and prioritizes model-continuation follow-ups when a response stops at `max_tokens`.
 
 ### `message_batches`
 
@@ -36,7 +36,7 @@ Optional scaffold for documented Anthropic Agent SDK workflows. It is designed a
 
 ### `claude_code_cli`
 
-Optional wrapper for explicitly configured documented CLI flows. It does not assume undocumented flags or browser automation and requires operator-supplied command templates.
+Optional wrapper for explicitly configured documented CLI flows. It does not assume undocumented flags or browser automation, bounds stdout/stderr capture, and requires explicit hook allowlists before any local hook command can run.
 
 ## Job State Model
 
@@ -49,7 +49,7 @@ Jobs always live in one of:
 - `failed`
 - `cancelled`
 
-The durable worker uses SQLite-backed claiming to prevent duplicate execution. On startup it scans stale `running` jobs and moves them into a recoverable state based on checkpoint availability.
+The durable worker uses SQLite-backed claiming to prevent duplicate execution, renews leases with background heartbeats while jobs are running, and drains in-flight work during graceful shutdown. On startup it scans expired `running` leases and moves those jobs into a recoverable state based on checkpoint availability.
 
 ## Retry Model
 
@@ -107,12 +107,20 @@ Key settings include:
 - `default_backend`
 - `model`
 - `worker.max_concurrency`
+- `worker.lease_seconds`
+- `worker.heartbeat_interval_seconds`
+- `worker.shutdown_drain_timeout_seconds`
+- `worker.continuation_priority_bonus`
 - `retry.base_delay_seconds`
 - `retry.max_delay_seconds`
 - `retry.max_attempts`
 - `backends.messages_api.api_key_env`
+- `backends.messages_api.compaction_message_threshold`
+- `backends.messages_api.compaction_keep_recent_messages`
 - `backends.agent_sdk.allowed_tools`
 - `backends.claude_code_cli.command_template`
+- `backends.claude_code_cli.allow_hooks`
+- `backends.claude_code_cli.allowed_hook_executables`
 - `storage.sqlite_path`
 - `logging.persist_payloads`
 - `privacy.enabled`
@@ -128,6 +136,7 @@ claude-orchestrator run-worker
 claude-orchestrator retry-due
 claude-orchestrator status
 claude-orchestrator inspect JOB_ID
+claude-orchestrator inspect JOB_ID --json
 claude-orchestrator cancel JOB_ID
 claude-orchestrator retry JOB_ID
 claude-orchestrator list
@@ -154,6 +163,7 @@ The dashboard is a lightweight FastAPI + Jinja2 app with HTMX polling. It shows:
 - last error summaries
 - job detail pages
 - retry/cancel actions
+- JSON status endpoints at `/api/status`, `/api/jobs`, and `/api/jobs/{job_id}`
 
 To run it:
 
@@ -189,7 +199,7 @@ Workers call recovery on startup:
 2. If the backend can resume from checkpoint/history, return the job to `queued`.
 3. Otherwise schedule a safe retry using the normal retry policy.
 
-This keeps local state authoritative and removes any dependency on website state.
+During normal execution, background heartbeats keep leases fresh so long-running jobs are not falsely recovered. During shutdown, workers stop claiming new jobs, wait for active work up to a configurable drain timeout, then cancel and persist interrupted jobs into recoverable retry states.
 
 ## Tests
 
@@ -199,10 +209,15 @@ The test suite focuses on:
 - retry-after and exponential backoff behavior
 - permanent vs transient classification
 - stale-running crash recovery
+- lease heartbeat renewal
+- graceful worker shutdown with active jobs
 - duplicate-claim prevention
 - SQLite persistence
 - log redaction
 - backend adapter behavior
+- message compaction and continuation follow-up
+- packaged web template loading
+- CLI backend hook/failure hardening
 - guardrail enforcement
 
 Run the tests with:

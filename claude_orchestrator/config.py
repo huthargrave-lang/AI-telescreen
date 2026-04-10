@@ -33,7 +33,12 @@ class StorageConfig:
 class WorkerConfig:
     max_concurrency: int = 4
     poll_interval_seconds: int = 5
+    lease_seconds: Optional[int] = None
     stale_after_seconds: int = 300
+    heartbeat_interval_seconds: int = 60
+    shutdown_drain_timeout_seconds: int = 30
+    shutdown_poll_interval_seconds: float = 0.2
+    continuation_priority_bonus: int = 1000
     max_batch_group_size: int = 25
     per_backend_concurrency: Dict[str, int] = field(
         default_factory=lambda: {
@@ -66,6 +71,10 @@ class MessagesApiBackendConfig:
     max_tokens: int = 2048
     timeout_seconds: int = 120
     base_url: Optional[str] = None
+    compaction_message_threshold: int = 12
+    compaction_keep_recent_messages: int = 6
+    compaction_char_threshold: int = 16000
+    compaction_summary_char_limit: int = 4000
 
 
 @dataclass
@@ -92,7 +101,12 @@ class ClaudeCodeCliBackendConfig:
     command_template: List[str] = field(default_factory=list)
     auth_check_command: List[str] = field(default_factory=list)
     hook_commands: List[str] = field(default_factory=list)
+    allow_hooks: bool = False
+    allowed_hook_executables: List[str] = field(default_factory=list)
     timeout_seconds: int = 1800
+    hook_timeout_seconds: int = 30
+    max_output_bytes: int = 1048576
+    preview_characters: int = 500
 
 
 @dataclass
@@ -124,6 +138,11 @@ class AppConfig:
 
     def json_log_path(self, root: Path) -> Path:
         return _resolve_path(root, self.logging.json_log_path)
+
+    def effective_lease_seconds(self) -> float:
+        """Return the configured worker lease duration."""
+
+        return float(self.worker.lease_seconds or self.worker.stale_after_seconds)
 
 
 def _resolve_path(root: Path, value: str) -> Path:
@@ -184,7 +203,12 @@ sqlite_path = "data/claude-orchestrator.db"
 [worker]
 max_concurrency = 4
 poll_interval_seconds = 5
+lease_seconds = 300
 stale_after_seconds = 300
+heartbeat_interval_seconds = 60
+shutdown_drain_timeout_seconds = 30
+shutdown_poll_interval_seconds = 0.2
+continuation_priority_bonus = 1000
 max_batch_group_size = 25
 
 [worker.per_backend_concurrency]
@@ -208,6 +232,10 @@ api_key_env = "ANTHROPIC_API_KEY"
 model = "claude-3-5-sonnet-latest"
 max_tokens = 2048
 timeout_seconds = 120
+compaction_message_threshold = 12
+compaction_keep_recent_messages = 6
+compaction_char_threshold = 16000
+compaction_summary_char_limit = 4000
 
 [backends.message_batches]
 enabled = true
@@ -228,5 +256,10 @@ executable = "claude"
 command_template = []
 auth_check_command = []
 hook_commands = []
+allow_hooks = false
+allowed_hook_executables = []
 timeout_seconds = 1800
+hook_timeout_seconds = 30
+max_output_bytes = 1048576
+preview_characters = 500
 """
