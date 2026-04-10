@@ -1,13 +1,13 @@
 # claude-orchestrator
 
-`claude-orchestrator` is a local-first orchestration layer for durable Anthropic workflows. It queues work, executes it through official Anthropic interfaces, persists all state locally in SQLite, and treats rate limits and upstream availability as normal operational states instead of edge cases.
+`claude-orchestrator` is a local-first orchestration layer for durable coding-agent workflows. It queues work, executes it through supported provider interfaces, persists all state locally in SQLite, and treats rate limits and upstream availability as normal operational states instead of edge cases.
 
 This project is intentionally compliance-bounded:
 
 - It does not scrape Claude.ai.
 - It does not automate the Claude consumer website.
 - It does not inspect consumer session-limit counters.
-- It relies only on supported Anthropic APIs, SDKs, and documented CLI-style integrations.
+- It relies only on supported Anthropic APIs, SDKs, documented CLI-style integrations, and explicitly configured Codex CLI execution.
 
 ## Architecture
 
@@ -20,23 +20,44 @@ The codebase is one-language Python and splits responsibilities cleanly:
 - `claude_orchestrator/web/`: FastAPI + Jinja2 + HTMX dashboard.
 - `claude_orchestrator/guardrails.py`: explicit compliance boundaries that reject consumer-site automation directions.
 
+## Provider vs Backend
+
+Provider and backend are separate concepts:
+
+- Provider: `anthropic` or `openai`
+- Backend: `messages_api`, `message_batches`, `agent_sdk`, `claude_code_cli`, or `codex_cli`
+
+Examples:
+
+- `anthropic + messages_api`
+- `anthropic + message_batches`
+- `anthropic + agent_sdk`
+- `anthropic + claude_code_cli`
+- `openai + codex_cli`
+
+The enqueue path infers `provider` from `backend` by default and validates mismatches if you pass both explicitly. Jobs and runs persist both fields so the CLI and dashboard can monitor both providers side by side.
+
 ## Backends
 
-### `messages_api`
+### `messages_api` (`provider=anthropic`)
 
 Default backend for direct Anthropic API requests. The backend treats the upstream API as stateless, stores conversation history locally, compacts older turns into `compact_summary`, and prioritizes model-continuation follow-ups when a response stops at `max_tokens`.
 
-### `message_batches`
+### `message_batches` (`provider=anthropic`)
 
 Optional bulk backend for many independent non-urgent jobs. Compatible queued jobs are grouped into Message Batches, then polled back into individual job outcomes.
 
-### `agent_sdk`
+### `agent_sdk` (`provider=anthropic`)
 
 Optional scaffold for documented Anthropic Agent SDK workflows. It is designed around bounded workspaces, tool allowlists, checkpoint-aware resume, and artifact capture.
 
-### `claude_code_cli`
+### `claude_code_cli` (`provider=anthropic`)
 
 Optional wrapper for explicitly configured documented CLI flows. It does not assume undocumented flags or browser automation, bounds stdout/stderr capture, and requires explicit hook allowlists before any local hook command can run.
+
+### `codex_cli` (`provider=openai`)
+
+Optional wrapper for explicitly configured Codex CLI flows. It is intentionally bounded: configurable executable and command template, timeout handling, capped stdout/stderr capture, retry classification for transient CLI failures, and no browser automation or consumer-site state.
 
 ## Job State Model
 
@@ -76,6 +97,7 @@ SQLite tables:
 - `message_batches`
 
 Migrations live in [`claude_orchestrator/migrations/0001_initial.sql`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/migrations/0001_initial.sql).
+Provider support is added in [`claude_orchestrator/migrations/0002_add_provider_columns.sql`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/migrations/0002_add_provider_columns.sql).
 
 ## Installation
 
@@ -121,6 +143,9 @@ Key settings include:
 - `backends.claude_code_cli.command_template`
 - `backends.claude_code_cli.allow_hooks`
 - `backends.claude_code_cli.allowed_hook_executables`
+- `backends.codex_cli.command_template`
+- `backends.codex_cli.timeout_seconds`
+- `backends.codex_cli.use_git_worktree`
 - `storage.sqlite_path`
 - `logging.persist_payloads`
 - `privacy.enabled`
@@ -132,6 +157,8 @@ Core commands:
 
 ```bash
 claude-orchestrator enqueue --prompt-file task.txt
+claude-orchestrator enqueue --backend codex_cli --prompt-file task.txt
+claude-orchestrator enqueue --backend codex_cli --provider openai --prompt-file task.txt
 claude-orchestrator run-worker
 claude-orchestrator retry-due
 claude-orchestrator status
@@ -158,12 +185,14 @@ claude-orchestrator config-init
 The dashboard is a lightweight FastAPI + Jinja2 app with HTMX polling. It shows:
 
 - state counts
-- recent jobs
+- recent jobs across Anthropic and OpenAI providers
+- provider/backend badges and workspace paths
 - retry timing
 - last error summaries
 - job detail pages
 - retry/cancel actions
 - JSON status endpoints at `/api/status`, `/api/jobs`, and `/api/jobs/{job_id}`
+- simple provider/backend/status filtering
 
 To run it:
 
@@ -200,6 +229,12 @@ Workers call recovery on startup:
 3. Otherwise schedule a safe retry using the normal retry policy.
 
 During normal execution, background heartbeats keep leases fresh so long-running jobs are not falsely recovered. During shutdown, workers stop claiming new jobs, wait for active work up to a configurable drain timeout, then cancel and persist interrupted jobs into recoverable retry states.
+
+## Current Limitations
+
+- `codex_cli` is a bounded subprocess backend in this pass. It does not yet stream events into the UI.
+- Workspace preparation is now structured for future git worktree support, but full worktree lifecycle management is still a later pass.
+- The dashboard is intentionally operational and lightweight rather than a full multi-agent control plane.
 
 ## Tests
 

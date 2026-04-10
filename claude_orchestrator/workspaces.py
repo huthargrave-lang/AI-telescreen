@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .models import Job
 
@@ -26,6 +26,19 @@ def ensure_job_workspace(workspace_root: Path, job_id: str) -> Path:
     workspace = workspace_root / job_id
     workspace.mkdir(parents=True, exist_ok=True)
     return ensure_within_root(workspace_root, workspace)
+
+
+def prepare_job_workspace(workspace_root: Path, job_id: str, metadata: Optional[dict[str, Any]] = None) -> Path:
+    """Prepare a job workspace, leaving room for future worktree-backed flows.
+
+    The current implementation keeps the existing per-job directory behavior. Metadata keys such as
+    ``use_git_worktree``, ``repo_path``, ``worktree_path``, ``branch_name``, and ``base_branch`` are
+    intentionally reserved so a future pass can add git worktree provisioning without changing the
+    orchestrator-facing contract.
+    """
+
+    _ = metadata or {}
+    return ensure_job_workspace(workspace_root, job_id)
 
 
 def store_private_prompt(workspace: Path, prompt: str, artifact_dir: str) -> Path:

@@ -4,7 +4,7 @@ import asyncio
 
 from claude_orchestrator.backends.agent_sdk import AgentSdkBackend
 from claude_orchestrator.config import AppConfig
-from claude_orchestrator.models import ConversationState, Job, JobStatus
+from claude_orchestrator.models import ConversationState, Job, JobStatus, ProviderName
 from claude_orchestrator.timeutils import utcnow
 
 
@@ -33,6 +33,7 @@ def _job() -> Job:
         created_at=now,
         updated_at=now,
         status=JobStatus.QUEUED,
+        provider=ProviderName.ANTHROPIC.value,
         backend="agent_sdk",
         task_type="code",
         priority=0,

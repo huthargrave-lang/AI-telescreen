@@ -46,6 +46,7 @@ class WorkerConfig:
             "message_batches": 1,
             "agent_sdk": 1,
             "claude_code_cli": 1,
+            "codex_cli": 1,
         }
     )
 
@@ -110,11 +111,24 @@ class ClaudeCodeCliBackendConfig:
 
 
 @dataclass
+class CodexCliBackendConfig:
+    enabled: bool = False
+    executable: str = "codex"
+    command_template: List[str] = field(default_factory=list)
+    timeout_seconds: int = 1800
+    auth_mode: str = "auto"
+    use_git_worktree: bool = False
+    max_output_bytes: int = 1048576
+    preview_characters: int = 500
+
+
+@dataclass
 class BackendsConfig:
     messages_api: MessagesApiBackendConfig = field(default_factory=MessagesApiBackendConfig)
     message_batches: MessageBatchesBackendConfig = field(default_factory=MessageBatchesBackendConfig)
     agent_sdk: AgentSdkBackendConfig = field(default_factory=AgentSdkBackendConfig)
     claude_code_cli: ClaudeCodeCliBackendConfig = field(default_factory=ClaudeCodeCliBackendConfig)
+    codex_cli: CodexCliBackendConfig = field(default_factory=CodexCliBackendConfig)
 
 
 @dataclass
@@ -216,6 +230,7 @@ messages_api = 4
 message_batches = 1
 agent_sdk = 1
 claude_code_cli = 1
+codex_cli = 1
 
 [ui]
 host = "127.0.0.1"
@@ -260,6 +275,16 @@ allow_hooks = false
 allowed_hook_executables = []
 timeout_seconds = 1800
 hook_timeout_seconds = 30
+max_output_bytes = 1048576
+preview_characters = 500
+
+[backends.codex_cli]
+enabled = false
+executable = "codex"
+command_template = ["codex", "run", "--workspace", "{workspace}", "--prompt-file", "{prompt_file}"]
+timeout_seconds = 1800
+auth_mode = "auto"
+use_git_worktree = false
 max_output_bytes = 1048576
 preview_characters = 500
 """

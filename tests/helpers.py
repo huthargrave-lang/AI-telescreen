@@ -121,6 +121,7 @@ def build_test_orchestrator(
 def create_job(orchestrator: OrchestratorService, **kwargs):
     request = EnqueueJobRequest(
         backend=kwargs.get("backend", "messages_api"),
+        provider=kwargs.get("provider"),
         task_type=kwargs.get("task_type", "test"),
         prompt=kwargs.get("prompt", "hello"),
         priority=kwargs.get("priority", 0),

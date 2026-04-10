@@ -48,13 +48,14 @@ def _load_metadata(raw: Optional[str]) -> dict:
 
 
 if typer is not None:  # pragma: no branch
-    app = typer.Typer(help="Durable local orchestration for official Anthropic workflows.")
+    app = typer.Typer(help="Durable local orchestration for provider-aware coding-agent workflows.")
 
     @app.command("enqueue")
     def enqueue_command(
         prompt: Optional[str] = typer.Option(None, "--prompt", help="Prompt text to enqueue."),
         prompt_file: Optional[Path] = typer.Option(None, "--prompt-file", help="Read prompt text from a file."),
         backend: Optional[str] = typer.Option(None, "--backend", help="Backend name."),
+        provider: Optional[str] = typer.Option(None, "--provider", help="Provider name override."),
         task_type: str = typer.Option("general", "--task-type", help="Logical task type."),
         priority: int = typer.Option(0, "--priority", help="Higher numbers run first."),
         metadata: Optional[str] = typer.Option(None, "--metadata", help="Inline JSON or @path/to/file.json."),
@@ -72,6 +73,7 @@ if typer is not None:  # pragma: no branch
         job = orchestrator.enqueue(
             EnqueueJobRequest(
                 backend=backend or orchestrator.config.default_backend,
+                provider=provider,
                 task_type=task_type,
                 prompt=prompt_text,
                 priority=priority,
@@ -83,7 +85,7 @@ if typer is not None:  # pragma: no branch
                 privacy_mode=privacy_mode,
             )
         )
-        typer.echo(f"enqueued {job.id} [{job.status.value}] backend={job.backend}")
+        typer.echo(f"enqueued {job.id} [{job.status.value}] provider={job.provider} backend={job.backend}")
 
     @app.command("run-worker")
     def run_worker_command(
@@ -131,6 +133,7 @@ if typer is not None:  # pragma: no branch
             "job": {
                 "id": job.id,
                 "status": job.status.value,
+                "provider": job.provider,
                 "backend": job.backend,
                 "task_type": job.task_type,
                 "attempts": {"current": job.attempt_count, "max": job.max_attempts},
@@ -182,6 +185,7 @@ if typer is not None:  # pragma: no branch
             return
         typer.echo(f"job {job.id}")
         typer.echo(f"  status: {job.status.value}")
+        typer.echo(f"  provider: {job.provider}")
         typer.echo(f"  backend: {job.backend}")
         typer.echo(f"  task_type: {job.task_type}")
         typer.echo(f"  attempts: {job.attempt_count}/{job.max_attempts}")
@@ -222,15 +226,16 @@ if typer is not None:  # pragma: no branch
     @app.command("list")
     def list_command(
         status: Optional[str] = typer.Option(None, "--status", help="Filter by status."),
+        provider: Optional[str] = typer.Option(None, "--provider", help="Filter by provider."),
         backend: Optional[str] = typer.Option(None, "--backend", help="Filter by backend."),
         limit: int = typer.Option(50, "--limit", help="Maximum rows."),
         config: Optional[Path] = typer.Option(None, "--config", help="Config TOML path."),
     ) -> None:
         orchestrator, _ = _build_services(config)
-        jobs = orchestrator.list_jobs(status=status, backend=backend, limit=limit)
+        jobs = orchestrator.list_jobs(status=status, provider=provider, backend=backend, limit=limit)
         for job in jobs:
             typer.echo(
-                f"{job.id} {job.status.value:13} backend={job.backend:16} "
+                f"{job.id} {job.status.value:13} provider={job.provider:10} backend={job.backend:16} "
                 f"priority={job.priority:3} attempts={job.attempt_count}/{job.max_attempts} "
                 f"followup={job.metadata.get('followup_type') or job.metadata.get('resume_hint') or '-'}"
             )
@@ -274,6 +279,7 @@ if typer is not None:  # pragma: no branch
         orchestrator, _ = _build_services(config)
         typer.echo(f"sqlite: {orchestrator.config.sqlite_path(Path.cwd())}")
         typer.echo(f"default backend: {orchestrator.config.default_backend}")
+        typer.echo("provider/backend split: provider is inferred from backend unless --provider is supplied.")
         typer.echo(f"enabled backends: {', '.join(sorted(orchestrator.backends))}")
         typer.echo(f"workspace root: {orchestrator.config.workspace_path(Path.cwd())}")
         typer.echo(f"privacy mode: {orchestrator.config.privacy.enabled}")

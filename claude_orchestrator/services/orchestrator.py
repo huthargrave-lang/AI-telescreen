@@ -20,10 +20,11 @@ from ..models import (
     JobStatus,
     RetryDisposition,
 )
+from ..providers import infer_provider, validate_provider_backend
 from ..repository import JobRepository
 from ..retry import RetryPolicy, RetryableBackendError, UserCancelledError
 from ..timeutils import utcnow
-from ..workspaces import ensure_job_workspace, store_private_prompt, store_response_artifact
+from ..workspaces import prepare_job_workspace, store_private_prompt, store_response_artifact
 from ..backends.base import BackendAdapter, BatchCapableBackend, BackendContext
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,10 @@ class OrchestratorService:
         backend_name = request.backend or self.config.default_backend
         if backend_name not in self.backends:
             raise ValueError(f"Unknown backend: {backend_name}")
+        provider_name = infer_provider(backend_name) if not request.provider else validate_provider_backend(
+            request.provider,
+            backend_name,
+        )
         existing = (
             self.repository.get_job_by_idempotency_key(request.idempotency_key)
             if request.idempotency_key
@@ -139,14 +144,15 @@ class OrchestratorService:
         if privacy_mode:
             prompt_to_store = "[stored_in_private_artifact]"
         request.backend = backend_name
-        request.model = request.model or metadata.get("model") or self.config.model
+        request.provider = provider_name
+        request.model = request.model or metadata.get("model") or self._default_model_for_backend(backend_name)
         request.metadata = metadata
         created = self.repository.create_job(
             request,
             prompt_to_store=prompt_to_store,
             workspace_path=None,
         )
-        actual_workspace = ensure_job_workspace(self.config.workspace_path(self.root), created.id)
+        actual_workspace = prepare_job_workspace(self.config.workspace_path(self.root), created.id, metadata)
         self.repository.set_workspace_path(created.id, actual_workspace)
         if privacy_mode:
             metadata = dict(created.metadata)
@@ -165,16 +171,24 @@ class OrchestratorService:
         self.repository.add_scheduler_event(
             created.id,
             "workspace_initialized",
-            {"workspace_path": str(actual_workspace)},
+            {"workspace_path": str(actual_workspace), "provider": provider_name, "backend": backend_name},
         )
         return self.repository.get_job(created.id)
 
     def status(self) -> Dict[str, int]:
         return self.repository.get_status_counts()
 
-    def list_jobs(self, *, status: Optional[str] = None, backend: Optional[str] = None, limit: int = 100) -> List[Job]:
+    def list_jobs(
+        self,
+        *,
+        status: Optional[str] = None,
+        provider: Optional[str] = None,
+        backend: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Job]:
         return self.repository.list_jobs(
             status=status,
+            provider=provider,
             backend=backend,
             limit=limit,
             continuation_priority_bonus=self.config.worker.continuation_priority_bonus,
@@ -288,7 +302,14 @@ class OrchestratorService:
             heartbeat.start()
             logger.info(
                 "job.execution.started",
-                extra={"context": {"job_id": job.id, "backend": job.backend, "worker_id": worker_id}},
+                extra={
+                    "context": {
+                        "job_id": job.id,
+                        "provider": job.provider,
+                        "backend": job.backend,
+                        "worker_id": worker_id,
+                    }
+                },
             )
             if self._should_continue_job(job, state, backend):
                 result = await backend.continue_job(job, state, context)
@@ -309,7 +330,14 @@ class OrchestratorService:
             )
             logger.info(
                 "job.execution.completed",
-                extra={"context": {"job_id": job.id, "backend": job.backend, "status": result.status.value}},
+                extra={
+                    "context": {
+                        "job_id": job.id,
+                        "provider": job.provider,
+                        "backend": job.backend,
+                        "status": result.status.value,
+                    }
+                },
             )
             return self.repository.get_job(job.id)
         except asyncio.CancelledError:
@@ -331,7 +359,14 @@ class OrchestratorService:
                 )
             logger.warning(
                 "job.execution.interrupted",
-                extra={"context": {"job_id": job.id, "backend": job.backend, "worker_id": worker_id}},
+                extra={
+                    "context": {
+                        "job_id": job.id,
+                        "provider": job.provider,
+                        "backend": job.backend,
+                        "worker_id": worker_id,
+                    }
+                },
             )
             raise
         except Exception as error:
@@ -525,7 +560,7 @@ class OrchestratorService:
     ) -> None:
         if result.updated_state is not None:
             self.repository.save_conversation_state(result.updated_state)
-        workspace = ensure_job_workspace(self.config.workspace_path(self.root), job.id)
+        workspace = prepare_job_workspace(self.config.workspace_path(self.root), job.id, job.metadata)
         if result.output and self.config.privacy.store_response_artifacts:
             response_path = store_response_artifact(workspace, result.output)
             result.artifacts.append(
@@ -535,7 +570,7 @@ class OrchestratorService:
                     created_at=utcnow(),
                     kind="response_text",
                     path=str(response_path),
-                    metadata={"source": job.backend},
+                    metadata={"source": job.backend, "provider": job.provider},
                 )
             )
         for artifact in result.artifacts:
@@ -616,6 +651,7 @@ class OrchestratorService:
             extra={
                 "context": {
                     "job_id": job.id,
+                    "provider": job.provider,
                     "backend": job.backend,
                     "decision": getattr(decision, "reason", None),
                     "error": str(error),
@@ -712,6 +748,11 @@ class OrchestratorService:
                 ("followup_type", "followup_reason", "followup_requested_at"),
             )
         return ({}, ("followup_type", "followup_reason", "followup_requested_at", "resume_hint"))
+
+    def _default_model_for_backend(self, backend_name: str) -> Optional[str]:
+        if backend_name in {"messages_api", "message_batches", "agent_sdk"}:
+            return self.config.backends.messages_api.model or self.config.model
+        return None
 
     def _should_continue_job(
         self,

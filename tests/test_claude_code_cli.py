@@ -8,7 +8,7 @@ import pytest
 
 from claude_orchestrator.backends.claude_code_cli import ClaudeCodeCliBackend
 from claude_orchestrator.config import AppConfig
-from claude_orchestrator.models import ConversationState, Job, JobStatus
+from claude_orchestrator.models import ConversationState, Job, JobStatus, ProviderName
 from claude_orchestrator.retry import ConfigurationError, PermanentBackendError
 from claude_orchestrator.timeutils import utcnow
 
@@ -38,6 +38,7 @@ def _job() -> Job:
         created_at=now,
         updated_at=now,
         status=JobStatus.QUEUED,
+        provider=ProviderName.ANTHROPIC.value,
         backend="claude_code_cli",
         task_type="code",
         priority=0,

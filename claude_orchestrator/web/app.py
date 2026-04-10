@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..bootstrap import bootstrap
+from ..providers import infer_provider
 from ..services.orchestrator import OrchestratorService
 
 try:  # pragma: no cover - optional dependency in the sandbox.
@@ -38,27 +39,40 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     app = FastAPI(title="claude-orchestrator")
 
     def render_dashboard_context(request: Request) -> dict:
-        jobs = orchestrator.list_jobs(limit=50)
+        status = request.query_params.get("status") or None
+        provider = request.query_params.get("provider") or None
+        backend = request.query_params.get("backend") or None
+        jobs = orchestrator.list_jobs(status=status, provider=provider, backend=backend, limit=50)
         return {
             "request": request,
             "counts": orchestrator.status(),
             "jobs": jobs,
             "refresh_seconds": orchestrator.config.ui.refresh_seconds,
+            "filters": {"status": status, "provider": provider, "backend": backend},
+            "available_providers": sorted(
+                {job.provider for job in orchestrator.list_jobs(limit=200)}
+                | {infer_provider(name) for name in orchestrator.backends.keys()}
+            ),
+            "available_backends": sorted(orchestrator.backends.keys()),
         }
 
     def serialize_job(job) -> dict:
         return {
             "id": job.id,
             "status": job.status.value,
+            "provider": job.provider,
             "backend": job.backend,
             "task_type": job.task_type,
             "priority": job.priority,
             "attempt_count": job.attempt_count,
             "max_attempts": job.max_attempts,
+            "model": job.model,
             "next_retry_at": job.next_retry_at.isoformat() if job.next_retry_at else None,
             "last_error_code": job.last_error_code,
             "last_error_message": job.last_error_message,
             "workspace_path": job.workspace_path,
+            "lease_owner": job.lease_owner,
+            "lease_expires_at": job.lease_expires_at.isoformat() if job.lease_expires_at else None,
             "metadata": job.metadata,
         }
 
@@ -112,8 +126,18 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         }
 
     @app.get("/api/jobs")
-    async def api_jobs(limit: int = 50):
-        return {"jobs": [serialize_job(job) for job in orchestrator.list_jobs(limit=limit)]}
+    async def api_jobs(
+        limit: int = 50,
+        status: Optional[str] = None,
+        provider: Optional[str] = None,
+        backend: Optional[str] = None,
+    ):
+        return {
+            "jobs": [
+                serialize_job(job)
+                for job in orchestrator.list_jobs(limit=limit, status=status, provider=provider, backend=backend)
+            ]
+        }
 
     @app.get("/api/jobs/{job_id}")
     async def api_job_detail(job_id: str):
@@ -132,6 +156,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     "id": run.id,
                     "started_at": run.started_at.isoformat(),
                     "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+                    "provider": run.provider,
+                    "backend": run.backend,
                     "usage": run.usage,
                     "exit_reason": run.exit_reason,
                     "response_summary": run.response_summary,

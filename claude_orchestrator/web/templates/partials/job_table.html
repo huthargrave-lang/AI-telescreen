@@ -2,10 +2,12 @@
   <thead>
     <tr>
       <th>Job</th>
-      <th>Status</th>
+      <th>Provider</th>
       <th>Backend</th>
+      <th>Status</th>
       <th>Priority</th>
       <th>Attempts</th>
+      <th>Model / Workspace</th>
       <th>Retry / Error</th>
     </tr>
   </thead>
@@ -13,10 +15,15 @@
     {% for job in jobs %}
       <tr>
         <td><a href="/jobs/{{ job.id }}"><code>{{ job.id }}</code></a></td>
+        <td><span class="pill">{{ job.provider }}</span></td>
+        <td><span class="pill">{{ job.backend }}</span></td>
         <td><span class="status-{{ job.status.value }}">{{ job.status.value }}</span></td>
-        <td>{{ job.backend }}</td>
         <td>{{ job.priority }}</td>
         <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
+        <td>
+          <div>{{ job.model or "n/a" }}</div>
+          <div class="meta">{{ job.workspace_path or "workspace pending" }}</div>
+        </td>
         <td>
           {% if job.next_retry_at %}
             <div class="meta">retry {{ job.next_retry_at.isoformat() }}</div>
@@ -30,7 +37,7 @@
       </tr>
     {% else %}
       <tr>
-        <td colspan="6" class="meta">No jobs recorded yet.</td>
+        <td colspan="8" class="meta">No jobs recorded yet.</td>
       </tr>
     {% endfor %}
   </tbody>

@@ -17,11 +17,17 @@ class JobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class ProviderName(str, Enum):
+    ANTHROPIC = "anthropic"
+    OPENAI = "openai"
+
+
 class BackendName(str, Enum):
     MESSAGES_API = "messages_api"
     AGENT_SDK = "agent_sdk"
     CLAUDE_CODE_CLI = "claude_code_cli"
     MESSAGE_BATCHES = "message_batches"
+    CODEX_CLI = "codex_cli"
 
 
 class RetryDisposition(str, Enum):
@@ -35,6 +41,7 @@ class EnqueueJobRequest:
     backend: str
     task_type: str
     prompt: str
+    provider: Optional[str] = None
     priority: int = 0
     metadata: Dict[str, Any] = field(default_factory=dict)
     max_attempts: int = 5
@@ -50,6 +57,7 @@ class Job:
     created_at: datetime
     updated_at: datetime
     status: JobStatus
+    provider: str
     backend: str
     task_type: str
     priority: int
@@ -74,6 +82,7 @@ class JobRun:
     job_id: str
     started_at: datetime
     ended_at: Optional[datetime]
+    provider: str
     backend: str
     request_payload: Dict[str, Any]
     response_summary: Dict[str, Any]

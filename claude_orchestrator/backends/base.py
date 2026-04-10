@@ -1,4 +1,4 @@
-"""Backend abstraction shared by all official Anthropic integrations."""
+"""Backend abstraction shared by supported provider integrations."""
 
 from __future__ import annotations
 

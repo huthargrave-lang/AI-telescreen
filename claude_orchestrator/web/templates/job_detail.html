@@ -5,7 +5,9 @@
     <div>
       <a href="/">← Back</a>
       <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ job.id }}</h1>
-      <p class="subtitle">Backend {{ job.backend }} · task {{ job.task_type }} · attempts {{ job.attempt_count }}/{{ job.max_attempts }}</p>
+      <p class="subtitle">
+        Provider {{ job.provider }} · backend {{ job.backend }} · task {{ job.task_type }} · attempts {{ job.attempt_count }}/{{ job.max_attempts }}
+      </p>
     </div>
     <div class="actions">
       <form method="post" action="/jobs/{{ job.id }}/retry">
@@ -21,12 +23,17 @@
     <section class="panel">
       <h2 style="margin-top:0;">Overview</h2>
       <p><strong>Status:</strong> <span class="status-{{ job.status.value }}">{{ job.status.value }}</span></p>
+      <p><strong>Provider:</strong> {{ job.provider }}</p>
+      <p><strong>Backend:</strong> {{ job.backend }}</p>
+      <p><strong>Model:</strong> {{ job.model or "n/a" }}</p>
       <p><strong>Created:</strong> {{ job.created_at.isoformat() }}</p>
       <p><strong>Updated:</strong> {{ job.updated_at.isoformat() }}</p>
       <p><strong>Next retry:</strong> {{ job.next_retry_at.isoformat() if job.next_retry_at else "n/a" }}</p>
       <p><strong>Last error code:</strong> {{ job.last_error_code or "n/a" }}</p>
       <p><strong>Last error:</strong> {{ job.last_error_message or "n/a" }}</p>
       <p><strong>Workspace:</strong> {{ job.workspace_path or "n/a" }}</p>
+      <p><strong>Lease owner:</strong> {{ job.lease_owner or "n/a" }}</p>
+      <p><strong>Lease expiry:</strong> {{ job.lease_expires_at.isoformat() if job.lease_expires_at else "n/a" }}</p>
       <pre>{{ job.metadata | tojson(indent=2) }}</pre>
     </section>
 
@@ -45,6 +52,8 @@
       {% for run in runs %}
         <article style="padding: 12px 0; border-top: 1px solid var(--border);">
           <div class="meta">{{ run.started_at.isoformat() }} → {{ run.ended_at.isoformat() if run.ended_at else "running" }}</div>
+          <div><strong>Provider:</strong> {{ run.provider }}</div>
+          <div><strong>Backend:</strong> {{ run.backend }}</div>
           <div><strong>Exit:</strong> {{ run.exit_reason or "n/a" }}</div>
           <pre>{{ run.response_summary | tojson(indent=2) }}</pre>
         </article>

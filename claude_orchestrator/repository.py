@@ -16,6 +16,7 @@ from .models import (
     Job,
     JobRun,
     JobStatus,
+    ProviderName,
     SchedulerEventRecord,
 )
 from .state_machine import ensure_transition
@@ -72,6 +73,7 @@ class JobRepository:
                     created_at,
                     updated_at,
                     status,
+                    provider,
                     backend,
                     task_type,
                     priority,
@@ -88,13 +90,14 @@ class JobRepository:
                     cancel_requested,
                     lease_owner,
                     lease_expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     to_iso8601(now),
                     to_iso8601(now),
                     JobStatus.QUEUED.value,
+                    request.provider or ProviderName.ANTHROPIC.value,
                     request.backend,
                     request.task_type,
                     request.priority,
@@ -146,6 +149,7 @@ class JobRepository:
                     _dumps(
                         {
                             "backend": request.backend,
+                            "provider": request.provider or ProviderName.ANTHROPIC.value,
                             "task_type": request.task_type,
                             "priority": request.priority,
                         }
@@ -175,6 +179,7 @@ class JobRepository:
         self,
         *,
         status: Optional[str] = None,
+        provider: Optional[str] = None,
         backend: Optional[str] = None,
         limit: int = 100,
         continuation_priority_bonus: int = 0,
@@ -184,6 +189,9 @@ class JobRepository:
         if status:
             clauses.append("status = ?")
             params.append(status)
+        if provider:
+            clauses.append("provider = ?")
+            params.append(provider)
         if backend:
             clauses.append("backend = ?")
             params.append(backend)
@@ -344,6 +352,20 @@ class JobRepository:
                     worker_id,
                 ),
             )
+            if updated.rowcount == 1:
+                connection.execute(
+                    """
+                    INSERT INTO scheduler_events (id, job_id, timestamp, event_type, detail_json)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        job_id,
+                        to_iso8601(now),
+                        "job.lease.renewed",
+                        _dumps({"worker_id": worker_id, "lease_expires_at": to_iso8601(expires_at)}),
+                    ),
+                )
         if updated.rowcount != 1:
             return None
         return expires_at
@@ -384,6 +406,7 @@ class JobRepository:
                     job_id,
                     started_at,
                     ended_at,
+                    provider,
                     backend,
                     request_payload_json,
                     response_summary_json,
@@ -391,13 +414,14 @@ class JobRepository:
                     headers_json,
                     error_json,
                     exit_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
                     job.id,
                     to_iso8601(now),
                     None,
+                    job.provider,
                     job.backend,
                     _dumps(request_payload),
                     "{}",
@@ -758,7 +782,7 @@ class JobRepository:
         with self.db.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT j.id AS job_id, j.status, e.timestamp, e.event_type, e.detail_json
+                SELECT j.id AS job_id, j.status, j.provider, j.backend, e.timestamp, e.event_type, e.detail_json
                 FROM jobs j
                 LEFT JOIN scheduler_events e ON e.job_id = j.id
                 ORDER BY e.timestamp ASC
@@ -768,6 +792,8 @@ class JobRepository:
             {
                 "job_id": row["job_id"],
                 "status": row["status"],
+                "provider": row["provider"] if "provider" in row.keys() else ProviderName.ANTHROPIC.value,
+                "backend": row["backend"],
                 "timestamp": row["timestamp"],
                 "event_type": row["event_type"],
                 "detail": _loads(row["detail_json"]),
@@ -797,6 +823,7 @@ class JobRepository:
                 """
                 SELECT * FROM jobs
                 WHERE backend = ?
+                  AND provider = ?
                   AND status = ?
                   AND task_type = ?
                   AND COALESCE(model, '') = COALESCE(?, '')
@@ -805,6 +832,7 @@ class JobRepository:
                 """,
                 (
                     anchor_job.backend,
+                    anchor_job.provider,
                     JobStatus.QUEUED.value,
                     anchor_job.task_type,
                     model,
@@ -950,6 +978,7 @@ class JobRepository:
             created_at=from_iso8601(row["created_at"]) or utcnow(),
             updated_at=from_iso8601(row["updated_at"]) or utcnow(),
             status=JobStatus(row["status"]),
+            provider=row["provider"] if "provider" in row.keys() else ProviderName.ANTHROPIC.value,
             backend=row["backend"],
             task_type=row["task_type"],
             priority=row["priority"],
@@ -974,6 +1003,7 @@ class JobRepository:
             job_id=row["job_id"],
             started_at=from_iso8601(row["started_at"]) or utcnow(),
             ended_at=from_iso8601(row["ended_at"]),
+            provider=row["provider"] if "provider" in row.keys() else ProviderName.ANTHROPIC.value,
             backend=row["backend"],
             request_payload=_loads(row["request_payload_json"]),
             response_summary=_loads(row["response_summary_json"]),

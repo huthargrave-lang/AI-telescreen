@@ -8,6 +8,7 @@ from typing import Dict
 from ..config import AppConfig
 from .agent_sdk import AgentSdkBackend
 from .claude_code_cli import ClaudeCodeCliBackend
+from .codex_cli import CodexCliBackend
 from .message_batches import MessageBatchesBackend
 from .messages_api import MessagesApiBackend
 
@@ -23,6 +24,8 @@ def build_backend_registry(config: AppConfig) -> Dict[str, object]:
         registry["agent_sdk"] = AgentSdkBackend(config)
     if config.backends.claude_code_cli.enabled:
         registry["claude_code_cli"] = ClaudeCodeCliBackend(config)
+    if config.backends.codex_cli.enabled:
+        registry["codex_cli"] = CodexCliBackend(config)
     return registry
 
 
@@ -37,6 +40,8 @@ def validate_backend_config(config: AppConfig) -> None:
         enabled_backends.add("agent_sdk")
     if config.backends.claude_code_cli.enabled:
         enabled_backends.add("claude_code_cli")
+    if config.backends.codex_cli.enabled:
+        enabled_backends.add("codex_cli")
 
     if config.default_backend not in enabled_backends:
         errors.append(
@@ -73,6 +78,17 @@ def validate_backend_config(config: AppConfig) -> None:
             and not config.backends.claude_code_cli.allowed_hook_executables
         ):
             errors.append("claude_code_cli hooks require allowed_hook_executables when allow_hooks is true.")
+
+    if config.backends.codex_cli.enabled:
+        executable = config.backends.codex_cli.executable
+        if not config.backends.codex_cli.command_template:
+            errors.append("codex_cli is enabled but command_template is empty.")
+        if shutil.which(executable) is None:
+            errors.append(f"codex_cli executable {executable!r} is not on PATH.")
+        if config.backends.codex_cli.timeout_seconds <= 0:
+            errors.append("codex_cli timeout_seconds must be greater than zero.")
+        if config.backends.codex_cli.max_output_bytes <= 0:
+            errors.append("codex_cli max_output_bytes must be greater than zero.")
 
     if errors:
         raise ValueError("Invalid configuration:\n- " + "\n- ".join(errors))

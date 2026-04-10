@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 from claude_orchestrator.backends.messages_api import MessagesApiBackend
 from claude_orchestrator.config import AppConfig
-from claude_orchestrator.models import ConversationState, Job, JobStatus, RetryDisposition
+from claude_orchestrator.models import ConversationState, Job, JobStatus, ProviderName, RetryDisposition
 from claude_orchestrator.timeutils import utcnow
 from claude_orchestrator.workspaces import ensure_job_workspace
 
@@ -64,6 +64,7 @@ def _job() -> Job:
         created_at=now,
         updated_at=now,
         status=JobStatus.QUEUED,
+        provider=ProviderName.ANTHROPIC.value,
         backend="messages_api",
         task_type="test",
         priority=0,

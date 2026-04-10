@@ -5,7 +5,7 @@
     <div>
       <h1 class="title">claude-orchestrator</h1>
       <p class="subtitle">
-        Local-first Anthropic job control with durable retries, restart recovery, and no consumer-site automation.
+        Local-first coding-agent control for Anthropic and OpenAI workflows with durable retries, restart recovery, and no consumer-site automation.
       </p>
     </div>
     <div class="pill">Refresh every {{ refresh_seconds }}s</div>
@@ -25,13 +25,51 @@
     <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom: 12px;">
       <div>
         <h2 style="margin:0;">Jobs</h2>
-        <div class="meta">Queued, running, waiting_retry, completed, failed, and cancelled work.</div>
+        <div class="meta">Anthropic and OpenAI jobs side by side, with provider, backend, workspace, and retry visibility.</div>
       </div>
     </div>
+    <form
+      id="job-filters"
+      class="actions"
+      hx-get="/partials/jobs"
+      hx-target="#job-table"
+      hx-swap="innerHTML"
+      style="margin-bottom: 14px;"
+    >
+      <label>
+        <span class="meta">Status</span><br />
+        <select name="status">
+          <option value="">All</option>
+          {% for state_name in ["queued", "running", "waiting_retry", "completed", "failed", "cancelled"] %}
+            <option value="{{ state_name }}" {% if filters.status == state_name %}selected{% endif %}>{{ state_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Provider</span><br />
+        <select name="provider">
+          <option value="">All</option>
+          {% for provider_name in available_providers %}
+            <option value="{{ provider_name }}" {% if filters.provider == provider_name %}selected{% endif %}>{{ provider_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Backend</span><br />
+        <select name="backend">
+          <option value="">All</option>
+          {% for backend_name in available_backends %}
+            <option value="{{ backend_name }}" {% if filters.backend == backend_name %}selected{% endif %}>{{ backend_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="secondary">Apply</button>
+    </form>
     <div
       id="job-table"
       hx-get="/partials/jobs"
       hx-trigger="load, every {{ refresh_seconds }}s"
+      hx-include="#job-filters"
       hx-swap="innerHTML"
     >
       {% include "partials/job_table.html" %}
