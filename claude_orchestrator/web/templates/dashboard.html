@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · claude-orchestrator{% endblock %}
+{% block body %}
+  <div class="header">
+    <div>
+      <h1 class="title">claude-orchestrator</h1>
+      <p class="subtitle">
+        Local-first Anthropic job control with durable retries, restart recovery, and no consumer-site automation.
+      </p>
+    </div>
+    <div class="pill">Refresh every {{ refresh_seconds }}s</div>
+  </div>
+
+  <div
+    id="job-counts"
+    class="grid columns"
+    hx-get="/partials/counts"
+    hx-trigger="load, every {{ refresh_seconds }}s"
+    hx-swap="innerHTML"
+  >
+    {% include "partials/job_counts.html" %}
+  </div>
+
+  <div class="panel" style="margin-top: 18px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom: 12px;">
+      <div>
+        <h2 style="margin:0;">Jobs</h2>
+        <div class="meta">Queued, running, waiting_retry, completed, failed, and cancelled work.</div>
+      </div>
+    </div>
+    <div
+      id="job-table"
+      hx-get="/partials/jobs"
+      hx-trigger="load, every {{ refresh_seconds }}s"
+      hx-swap="innerHTML"
+    >
+      {% include "partials/job_table.html" %}
+    </div>
+  </div>
+{% endblock %}

@@ -1,0 +1,37 @@
+<table>
+  <thead>
+    <tr>
+      <th>Job</th>
+      <th>Status</th>
+      <th>Backend</th>
+      <th>Priority</th>
+      <th>Attempts</th>
+      <th>Retry / Error</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in jobs %}
+      <tr>
+        <td><a href="/jobs/{{ job.id }}"><code>{{ job.id }}</code></a></td>
+        <td><span class="status-{{ job.status.value }}">{{ job.status.value }}</span></td>
+        <td>{{ job.backend }}</td>
+        <td>{{ job.priority }}</td>
+        <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
+        <td>
+          {% if job.next_retry_at %}
+            <div class="meta">retry {{ job.next_retry_at.isoformat() }}</div>
+          {% endif %}
+          {% if job.last_error_message %}
+            <div>{{ job.last_error_message }}</div>
+          {% else %}
+            <div class="meta">n/a</div>
+          {% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr>
+        <td colspan="6" class="meta">No jobs recorded yet.</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>

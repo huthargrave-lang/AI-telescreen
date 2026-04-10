@@ -1,0 +1,66 @@
+default_backend = "messages_api"
+model = "claude-3-5-sonnet-latest"
+workspace_root = "workspaces"
+
+[retry]
+base_delay_seconds = 15
+max_delay_seconds = 300
+max_attempts = 5
+jitter_ratio = 0.1
+
+[logging]
+level = "INFO"
+persist_payloads = true
+json_log_path = "logs/claude-orchestrator.jsonl"
+
+[storage]
+sqlite_path = "data/claude-orchestrator.db"
+
+[worker]
+max_concurrency = 4
+poll_interval_seconds = 5
+stale_after_seconds = 300
+max_batch_group_size = 25
+
+[worker.per_backend_concurrency]
+messages_api = 4
+message_batches = 1
+agent_sdk = 1
+claude_code_cli = 1
+
+[ui]
+host = "127.0.0.1"
+port = 8000
+refresh_seconds = 5
+
+[privacy]
+enabled = false
+prompt_artifact_dir = "private"
+store_response_artifacts = true
+
+[backends.messages_api]
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-3-5-sonnet-latest"
+max_tokens = 2048
+timeout_seconds = 120
+
+[backends.message_batches]
+enabled = true
+poll_interval_seconds = 30
+max_batch_size = 20
+
+[backends.agent_sdk]
+enabled = false
+api_key_env = "ANTHROPIC_API_KEY"
+workspace_root = "workspaces"
+allowed_tools = ["read", "write"]
+turn_limit = 20
+timeout_seconds = 900
+
+[backends.claude_code_cli]
+enabled = false
+executable = "claude"
+command_template = []
+auth_check_command = []
+hook_commands = []
+timeout_seconds = 1800

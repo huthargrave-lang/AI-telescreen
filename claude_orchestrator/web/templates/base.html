@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}claude-orchestrator{% endblock %}</title>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <style>
+      :root {
+        --bg: #f6f2ea;
+        --panel: rgba(255, 252, 247, 0.88);
+        --text: #1d1d1a;
+        --muted: #6b675e;
+        --accent: #005f73;
+        --accent-soft: #cde5e7;
+        --danger: #b42318;
+        --warn: #9a6700;
+        --ok: #0f766e;
+        --border: rgba(29, 29, 26, 0.12);
+        --shadow: 0 20px 50px rgba(35, 30, 22, 0.08);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+        background:
+          radial-gradient(circle at top right, rgba(0, 95, 115, 0.18), transparent 34%),
+          radial-gradient(circle at bottom left, rgba(238, 155, 0, 0.18), transparent 28%),
+          var(--bg);
+        color: var(--text);
+      }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .shell {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: end;
+        margin-bottom: 24px;
+      }
+      .title {
+        font-size: clamp(2rem, 4vw, 3.5rem);
+        line-height: 0.95;
+        margin: 0;
+      }
+      .subtitle {
+        color: var(--muted);
+        max-width: 48rem;
+        margin: 8px 0 0;
+      }
+      .panel {
+        background: var(--panel);
+        backdrop-filter: blur(12px);
+        border: 1px solid var(--border);
+        border-radius: 22px;
+        box-shadow: var(--shadow);
+        padding: 20px;
+      }
+      .grid {
+        display: grid;
+        gap: 18px;
+      }
+      .grid.columns {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.92rem;
+        background: rgba(0, 95, 115, 0.08);
+      }
+      .status-queued { color: var(--accent); }
+      .status-running { color: var(--warn); }
+      .status-waiting_retry { color: var(--warn); }
+      .status-completed { color: var(--ok); }
+      .status-failed, .status-cancelled { color: var(--danger); }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.95rem;
+      }
+      th, td {
+        text-align: left;
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-size: 0.84rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: var(--accent);
+        color: white;
+        font: inherit;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: rgba(0, 95, 115, 0.12);
+        color: var(--accent);
+      }
+      code, pre {
+        font-family: "SFMono-Regular", "Menlo", monospace;
+        font-size: 0.88rem;
+      }
+      pre {
+        white-space: pre-wrap;
+        background: rgba(0, 0, 0, 0.04);
+        border-radius: 14px;
+        padding: 14px;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+      @media (max-width: 720px) {
+        .shell { padding: 16px; }
+        .header { display: block; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      {% block body %}{% endblock %}
+    </div>
+  </body>
+</html>

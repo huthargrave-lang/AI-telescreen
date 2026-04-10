@@ -1,0 +1,6 @@
+{% for status, count in counts.items() %}
+  <section class="panel">
+    <div class="meta">{{ status }}</div>
+    <div style="font-size: 2rem; line-height: 1; margin-top: 6px;" class="status-{{ status }}">{{ count }}</div>
+  </section>
+{% endfor %}

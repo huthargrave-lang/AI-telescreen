@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id }} · claude-orchestrator{% endblock %}
+{% block body %}
+  <div class="header">
+    <div>
+      <a href="/">← Back</a>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ job.id }}</h1>
+      <p class="subtitle">Backend {{ job.backend }} · task {{ job.task_type }} · attempts {{ job.attempt_count }}/{{ job.max_attempts }}</p>
+    </div>
+    <div class="actions">
+      <form method="post" action="/jobs/{{ job.id }}/retry">
+        <button type="submit">Retry</button>
+      </form>
+      <form method="post" action="/jobs/{{ job.id }}/cancel">
+        <button type="submit" class="secondary">Cancel</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+    <section class="panel">
+      <h2 style="margin-top:0;">Overview</h2>
+      <p><strong>Status:</strong> <span class="status-{{ job.status.value }}">{{ job.status.value }}</span></p>
+      <p><strong>Created:</strong> {{ job.created_at.isoformat() }}</p>
+      <p><strong>Updated:</strong> {{ job.updated_at.isoformat() }}</p>
+      <p><strong>Next retry:</strong> {{ job.next_retry_at.isoformat() if job.next_retry_at else "n/a" }}</p>
+      <p><strong>Last error code:</strong> {{ job.last_error_code or "n/a" }}</p>
+      <p><strong>Last error:</strong> {{ job.last_error_message or "n/a" }}</p>
+      <p><strong>Workspace:</strong> {{ job.workspace_path or "n/a" }}</p>
+      <pre>{{ job.metadata | tojson(indent=2) }}</pre>
+    </section>
+
+    <section class="panel">
+      <h2 style="margin-top:0;">Conversation State</h2>
+      <p><strong>System prompt:</strong> {{ state.system_prompt or "n/a" }}</p>
+      <p><strong>Compact summary:</strong> {{ state.compact_summary or "n/a" }}</p>
+      <p><strong>Checkpoint:</strong> {{ state.last_checkpoint_at.isoformat() if state.last_checkpoint_at else "n/a" }}</p>
+      <pre>{{ state.tool_context | tojson(indent=2) }}</pre>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:18px;">
+    <h2 style="margin-top:0;">Runs</h2>
+    {% if runs %}
+      {% for run in runs %}
+        <article style="padding: 12px 0; border-top: 1px solid var(--border);">
+          <div class="meta">{{ run.started_at.isoformat() }} → {{ run.ended_at.isoformat() if run.ended_at else "running" }}</div>
+          <div><strong>Exit:</strong> {{ run.exit_reason or "n/a" }}</div>
+          <pre>{{ run.response_summary | tojson(indent=2) }}</pre>
+        </article>
+      {% endfor %}
+    {% else %}
+      <p class="meta">No runs recorded yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" style="margin-top:18px;">
+    <h2 style="margin-top:0;">Events</h2>
+    {% if events %}
+      <table>
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Type</th>
+            <th>Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for event in events %}
+            <tr>
+              <td>{{ event.timestamp.isoformat() }}</td>
+              <td>{{ event.event_type }}</td>
+              <td><code>{{ event.detail | tojson }}</code></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="meta">No scheduler events recorded yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" style="margin-top:18px;">
+    <h2 style="margin-top:0;">Artifacts</h2>
+    {% if artifacts %}
+      <table>
+        <thead>
+          <tr>
+            <th>Created</th>
+            <th>Kind</th>
+            <th>Path</th>
+            <th>Metadata</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for artifact in artifacts %}
+            <tr>
+              <td>{{ artifact.created_at.isoformat() }}</td>
+              <td>{{ artifact.kind }}</td>
+              <td><code>{{ artifact.path }}</code></td>
+              <td><code>{{ artifact.metadata | tojson }}</code></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="meta">No artifacts recorded yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}
