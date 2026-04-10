@@ -76,6 +76,30 @@ def test_lease_renewal_requires_current_owner(tmp_path):
 
     assert repository.renew_job_lease(job.id, "worker-2", lease_seconds=config.effective_lease_seconds()) is None
     assert repository.renew_job_lease(job.id, "worker-1", lease_seconds=config.effective_lease_seconds()) is not None
+    assert repository.renew_lease(job.id, "worker-1", lease_seconds=config.effective_lease_seconds()) is True
+
+
+def test_stream_event_round_trip(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    job = create_job(orchestrator)
+
+    repository.add_stream_event(
+        job_id=job.id,
+        provider=job.provider,
+        backend=job.backend,
+        event_type="stdout_line",
+        phase="planning",
+        message="Planning next step.",
+        metadata={"source": "stdout"},
+    )
+
+    events = repository.get_stream_events(job.id)
+    latest = repository.get_latest_stream_event(job.id)
+
+    assert len(events) == 1
+    assert events[0].phase == "planning"
+    assert latest is not None
+    assert latest.message == "Planning next step."
 
 
 def test_migration_adds_provider_columns_with_safe_defaults(tmp_path):

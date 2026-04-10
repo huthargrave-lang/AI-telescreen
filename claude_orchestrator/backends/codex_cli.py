@@ -1,4 +1,4 @@
-"""Optional OpenAI Codex CLI backend wrapper."""
+"""Optional OpenAI Codex CLI backend wrapper with durable stream events."""
 
 from __future__ import annotations
 
@@ -26,15 +26,17 @@ class CodexCliBackend(BackendAdapter):
         self.retry_policy = RetryPolicy(config.retry)
 
     async def submit(self, job: Job, state: ConversationState, context: BackendContext) -> BackendResult:
-        workspace = prepare_job_workspace(context.workspace_root, job.id, job.metadata)
+        workspace_result = prepare_job_workspace(context.workspace_root, job.id, job.metadata)
+        workspace = workspace_result.workspace_path
         prompt = resolve_job_prompt(job)
         prompt_file = workspace / "codex_prompt.txt"
         prompt_file.write_text(prompt, encoding="utf-8")
         command = self._build_command(workspace=workspace, prompt_file=prompt_file)
-        returncode, stdout_text, stderr_text, stdout_truncated, stderr_truncated = await self._run_subprocess(
+        returncode, stdout_text, stderr_text, stdout_truncated, stderr_truncated, latest_phase = await self._run_subprocess(
             command,
             cwd=workspace,
             timeout_seconds=self.config.backends.codex_cli.timeout_seconds,
+            context=context,
         )
 
         if returncode != 0:
@@ -69,6 +71,10 @@ class CodexCliBackend(BackendAdapter):
                         "stdout_truncated": stdout_truncated,
                         "stderr_truncated": stderr_truncated,
                         "returncode": returncode,
+                        "latest_phase": latest_phase,
+                        "workspace_kind": workspace_result.workspace_kind,
+                        "worktree_path": str(workspace_result.worktree_path) if workspace_result.worktree_path else None,
+                        "branch_name": workspace_result.branch_name,
                     },
                 )
             ],
@@ -78,12 +84,14 @@ class CodexCliBackend(BackendAdapter):
                 "workspace": str(workspace),
                 "provider": job.provider,
                 "backend": job.backend,
+                "workspace_kind": workspace_result.workspace_kind,
             },
             response_summary={
                 "stdout_preview": stdout_text[:preview_limit],
                 "stderr_preview": stderr_text[:preview_limit],
                 "stdout_truncated": stdout_truncated,
                 "stderr_truncated": stderr_truncated,
+                "latest_phase": latest_phase,
             },
             exit_reason="completed",
         )
@@ -153,7 +161,8 @@ class CodexCliBackend(BackendAdapter):
         *,
         cwd: Path,
         timeout_seconds: int,
-    ) -> Tuple[int, str, str, bool, bool]:
+        context: BackendContext,
+    ) -> Tuple[int, str, str, bool, bool, Optional[str]]:
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -164,42 +173,136 @@ class CodexCliBackend(BackendAdapter):
         except FileNotFoundError as exc:
             raise ConfigurationError(str(exc)) from exc
 
-        stdout_task = asyncio.create_task(
-            self._read_stream_limited(process.stdout, self.config.backends.codex_cli.max_output_bytes)
+        current_phase: Optional[str] = None
+        stdout_buffer = bytearray()
+        stderr_buffer = bytearray()
+        stdout_truncated = False
+        stderr_truncated = False
+        byte_limit = self.config.backends.codex_cli.max_output_bytes
+
+        self._emit_event(
+            context,
+            event_type="process_started",
+            phase=None,
+            message="Codex CLI process started.",
+            metadata={"command": command, "cwd": str(cwd), "pid": process.pid},
         )
-        stderr_task = asyncio.create_task(
-            self._read_stream_limited(process.stderr, self.config.backends.codex_cli.max_output_bytes)
-        )
+
+        async def pump_stream(stream: Optional[asyncio.StreamReader], source: str) -> None:
+            nonlocal current_phase, stdout_truncated, stderr_truncated
+            if stream is None:
+                return
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                stripped_message = line.decode("utf-8", errors="replace").rstrip("\r\n")
+                if source == "stdout":
+                    stdout_truncated = self._append_limited(stdout_buffer, line, byte_limit) or stdout_truncated
+                else:
+                    stderr_truncated = self._append_limited(stderr_buffer, line, byte_limit) or stderr_truncated
+
+                inferred_phase = self._infer_phase(stripped_message)
+                if inferred_phase and inferred_phase != current_phase:
+                    current_phase = inferred_phase
+                    self._emit_event(
+                        context,
+                        event_type="phase_changed",
+                        phase=current_phase,
+                        message=stripped_message or f"Entered {current_phase} phase.",
+                        metadata={"source": source},
+                    )
+                if stripped_message:
+                    self._emit_event(
+                        context,
+                        event_type=f"{source}_line",
+                        phase=current_phase,
+                        message=stripped_message,
+                        metadata={"source": source},
+                    )
+
+        stdout_task = asyncio.create_task(pump_stream(process.stdout, "stdout"))
+        stderr_task = asyncio.create_task(pump_stream(process.stderr, "stderr"))
         try:
             returncode = await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
         except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
+            self._emit_event(
+                context,
+                event_type="process_timeout",
+                phase=current_phase,
+                message="Codex CLI timed out.",
+                metadata={"timeout_seconds": timeout_seconds},
+            )
+            await self._terminate_process(process)
             await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
             raise RetryableBackendError("Codex CLI timed out.") from exc
+        except asyncio.CancelledError:
+            self._emit_event(
+                context,
+                event_type="process_interrupted",
+                phase=current_phase,
+                message="Codex CLI interrupted during worker shutdown.",
+                metadata={},
+            )
+            await self._terminate_process(process)
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            raise
 
-        stdout_text, stdout_truncated = await stdout_task
-        stderr_text, stderr_truncated = await stderr_task
-        return returncode, stdout_text.strip(), stderr_text.strip(), stdout_truncated, stderr_truncated
+        await asyncio.gather(stdout_task, stderr_task)
 
-    async def _read_stream_limited(
+        stdout_text = stdout_buffer.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr_buffer.decode("utf-8", errors="replace").strip()
+        self._emit_event(
+            context,
+            event_type="process_completed" if returncode == 0 else "process_failed",
+            phase=current_phase or ("finalizing" if returncode == 0 else None),
+            message=(stdout_text or stderr_text or f"Codex CLI exited with code {returncode}")[:500],
+            metadata={"returncode": returncode},
+        )
+        return returncode, stdout_text, stderr_text, stdout_truncated, stderr_truncated, current_phase
+
+    async def _terminate_process(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        terminate = getattr(process, "terminate", None)
+        if callable(terminate):
+            terminate()
+        else:
+            process.kill()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+
+    def _append_limited(self, buffer: bytearray, chunk: bytes, byte_limit: int) -> bool:
+        remaining = max(byte_limit - len(buffer), 0)
+        if remaining > 0:
+            buffer.extend(chunk[:remaining])
+        return len(chunk) > remaining
+
+    def _infer_phase(self, message: str) -> Optional[str]:
+        lowered = message.lower()
+        if any(token in lowered for token in ("plan", "planning", "inspect", "analy", "investigat")):
+            return "planning"
+        if any(token in lowered for token in ("edit", "patch", "write", "modify", "update file")):
+            return "editing"
+        if any(token in lowered for token in ("test", "pytest", "lint", "check", "verification")):
+            return "testing"
+        if any(token in lowered for token in ("final", "summary", "completed", "done")):
+            return "finalizing"
+        return None
+
+    def _emit_event(
         self,
-        stream: Optional[asyncio.StreamReader],
-        byte_limit: int,
-    ) -> Tuple[str, bool]:
-        if stream is None:
-            return "", False
-        chunks: List[bytes] = []
-        kept = 0
-        truncated = False
-        while True:
-            chunk = await stream.read(65536)
-            if not chunk:
-                break
-            remaining = max(byte_limit - kept, 0)
-            if remaining > 0:
-                chunks.append(chunk[:remaining])
-                kept += len(chunk[:remaining])
-            if len(chunk) > remaining:
-                truncated = True
-        return b"".join(chunks).decode("utf-8", errors="replace"), truncated
+        context: BackendContext,
+        *,
+        event_type: str,
+        phase: Optional[str],
+        message: str,
+        metadata: Dict[str, object],
+    ) -> None:
+        emit_stream_event = getattr(context, "emit_stream_event", None)
+        if emit_stream_event is None:
+            return
+        emit_stream_event(event_type, phase, message, metadata)

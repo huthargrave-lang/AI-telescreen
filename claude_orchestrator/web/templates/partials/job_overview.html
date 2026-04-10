@@ -1,0 +1,22 @@
+<section class="panel">
+  <h2 style="margin-top:0;">Overview</h2>
+  <p><strong>Status:</strong> <span class="status-{{ job.status.value }}">{{ job.status.value }}</span></p>
+  <p><strong>Provider:</strong> {{ job.provider }}</p>
+  <p><strong>Backend:</strong> {{ job.backend }}</p>
+  <p><strong>Model:</strong> {{ job.model or "n/a" }}</p>
+  <p><strong>Workspace:</strong> {{ job.workspace_path or "n/a" }}</p>
+  <p><strong>Workspace kind:</strong> {{ job.metadata.get("workspace_kind") or "directory" }}</p>
+  <p><strong>Repo path:</strong> {{ job.metadata.get("repo_path") or "n/a" }}</p>
+  <p><strong>Worktree path:</strong> {{ job.metadata.get("worktree_path") or "n/a" }}</p>
+  <p><strong>Branch:</strong> {{ job.metadata.get("branch_name") or "n/a" }}</p>
+  <p><strong>Base branch:</strong> {{ job.metadata.get("base_branch") or "n/a" }}</p>
+  <p><strong>Cleanup policy:</strong> {{ job.metadata.get("cleanup_policy") or "none" }}</p>
+  <p><strong>Created:</strong> {{ job.created_at.isoformat() }}</p>
+  <p><strong>Updated:</strong> {{ job.updated_at.isoformat() }}</p>
+  <p><strong>Next retry:</strong> {{ job.next_retry_at.isoformat() if job.next_retry_at else "n/a" }}</p>
+  <p><strong>Last error code:</strong> {{ job.last_error_code or "n/a" }}</p>
+  <p><strong>Last error:</strong> {{ job.last_error_message or "n/a" }}</p>
+  <p><strong>Lease owner:</strong> {{ job.lease_owner or "n/a" }}</p>
+  <p><strong>Lease expiry:</strong> {{ job.lease_expires_at.isoformat() if job.lease_expires_at else "n/a" }}</p>
+  <pre>{{ job.metadata | tojson(indent=2) }}</pre>
+</section>

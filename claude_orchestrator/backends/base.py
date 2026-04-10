@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Protocol, Sequence, Tuple, runtime_checkable
+from typing import Callable, Dict, Optional, Protocol, Sequence, Tuple, runtime_checkable
 
 from ..config import AppConfig
 from ..models import BackendResult, BatchPollResult, BatchSubmissionResult, ConversationState, Job, RetryDecision
@@ -15,6 +15,7 @@ class BackendContext:
     config: AppConfig
     workspace_root: Path
     worker_id: str
+    emit_stream_event: Optional[Callable[[str, Optional[str], str, Dict[str, object]], None]] = None
 
 
 @runtime_checkable

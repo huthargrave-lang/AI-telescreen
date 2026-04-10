@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..bootstrap import bootstrap
+from ..models import JobStreamEvent, JobStatus
 from ..providers import infer_provider
 from ..services.orchestrator import OrchestratorService
 
@@ -38,6 +39,30 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
     app = FastAPI(title="claude-orchestrator")
 
+    def _stream_snapshot(job_id: str) -> tuple[Optional[JobStreamEvent], Optional[str], Optional[str]]:
+        events = orchestrator.repository.get_stream_events(job_id, limit=50)
+        latest = events[-1] if events else None
+        latest_phase = next((event.phase for event in reversed(events) if event.phase), None)
+        latest_progress = next((event.message for event in reversed(events) if event.message), None)
+        return latest, latest_phase, latest_progress
+
+    def _job_detail_context(request: Request, job_id: str) -> dict:
+        details = orchestrator.inspect(job_id)
+        return {
+            "request": request,
+            "job": details.job,
+            "state": details.state,
+            "runs": details.runs,
+            "events": details.events,
+            "stream_events": details.stream_events,
+            "latest_stream_event": details.latest_stream_event,
+            "latest_phase": details.latest_phase,
+            "latest_progress_message": details.latest_progress_message,
+            "artifacts": details.artifacts,
+            "refresh_seconds": orchestrator.config.ui.refresh_seconds,
+            "is_active": details.job.status == JobStatus.RUNNING,
+        }
+
     def render_dashboard_context(request: Request) -> dict:
         status = request.query_params.get("status") or None
         provider = request.query_params.get("provider") or None
@@ -57,6 +82,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         }
 
     def serialize_job(job) -> dict:
+        latest_stream_event, latest_phase, latest_progress = _stream_snapshot(job.id)
         return {
             "id": job.id,
             "status": job.status.value,
@@ -71,8 +97,17 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "last_error_code": job.last_error_code,
             "last_error_message": job.last_error_message,
             "workspace_path": job.workspace_path,
+            "workspace_kind": job.metadata.get("workspace_kind"),
+            "repo_path": job.metadata.get("repo_path"),
+            "worktree_path": job.metadata.get("worktree_path"),
+            "branch_name": job.metadata.get("branch_name"),
+            "base_branch": job.metadata.get("base_branch"),
+            "cleanup_policy": job.metadata.get("cleanup_policy"),
             "lease_owner": job.lease_owner,
             "lease_expires_at": job.lease_expires_at.isoformat() if job.lease_expires_at else None,
+            "latest_phase": latest_phase,
+            "latest_progress_message": latest_progress,
+            "last_activity_at": latest_stream_event.timestamp.isoformat() if latest_stream_event else job.updated_at.isoformat(),
             "metadata": job.metadata,
         }
 
@@ -104,18 +139,26 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
     async def job_detail(request: Request, job_id: str):
-        details = orchestrator.inspect(job_id)
         return templates.TemplateResponse(
             request=request,
             name="job_detail.html",
-            context={
-                "request": request,
-                "job": details.job,
-                "state": details.state,
-                "runs": details.runs,
-                "events": details.events,
-                "artifacts": details.artifacts,
-            },
+            context=_job_detail_context(request, job_id),
+        )
+
+    @app.get("/partials/jobs/{job_id}/overview", response_class=HTMLResponse)
+    async def job_overview_partial(request: Request, job_id: str):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/job_overview.html",
+            context=_job_detail_context(request, job_id),
+        )
+
+    @app.get("/partials/jobs/{job_id}/stream-events", response_class=HTMLResponse)
+    async def job_stream_events_partial(request: Request, job_id: str):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/job_stream_events.html",
+            context=_job_detail_context(request, job_id),
         )
 
     @app.get("/api/status")
@@ -172,6 +215,38 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     "detail": event.detail,
                 }
                 for event in details.events
+            ],
+            "latest_phase": details.latest_phase,
+            "latest_progress_message": details.latest_progress_message,
+            "stream_events": [
+                {
+                    "timestamp": event.timestamp.isoformat(),
+                    "event_type": event.event_type,
+                    "phase": event.phase,
+                    "message": event.message,
+                    "metadata": event.metadata,
+                }
+                for event in details.stream_events
+            ],
+        }
+
+    @app.get("/api/jobs/{job_id}/stream-events")
+    async def api_job_stream_events(job_id: str, limit: int = 100):
+        events = orchestrator.repository.get_stream_events(job_id, limit=limit)
+        latest_phase = next((event.phase for event in reversed(events) if event.phase), None)
+        latest_progress = next((event.message for event in reversed(events) if event.message), None)
+        return {
+            "latest_phase": latest_phase,
+            "latest_progress_message": latest_progress,
+            "events": [
+                {
+                    "timestamp": event.timestamp.isoformat(),
+                    "event_type": event.event_type,
+                    "phase": event.phase,
+                    "message": event.message,
+                    "metadata": event.metadata,
+                }
+                for event in events
             ],
         }
 

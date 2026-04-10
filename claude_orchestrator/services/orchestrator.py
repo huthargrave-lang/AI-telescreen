@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from ..models import (
     ConversationState,
     EnqueueJobRequest,
     Job,
+    JobStreamEvent,
     JobStatus,
     RetryDisposition,
 )
@@ -24,7 +26,7 @@ from ..providers import infer_provider, validate_provider_backend
 from ..repository import JobRepository
 from ..retry import RetryPolicy, RetryableBackendError, UserCancelledError
 from ..timeutils import utcnow
-from ..workspaces import prepare_job_workspace, store_private_prompt, store_response_artifact
+from ..workspaces import cleanup_job_workspace, prepare_job_workspace, store_private_prompt, store_response_artifact
 from ..backends.base import BackendAdapter, BatchCapableBackend, BackendContext
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,10 @@ class JobInspection:
     state: ConversationState
     runs: List[Any]
     events: List[Any]
+    stream_events: List[JobStreamEvent]
+    latest_stream_event: Optional[JobStreamEvent]
+    latest_phase: Optional[str]
+    latest_progress_message: Optional[str]
     artifacts: List[ArtifactRecord]
 
 
@@ -59,6 +65,7 @@ class LeaseHeartbeat:
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event = asyncio.Event()
         self.lost_lease = False
+        self._renewal_count = 0
 
     def start(self) -> None:
         if self._task is not None or self.heartbeat_interval_seconds <= 0:
@@ -83,25 +90,42 @@ class LeaseHeartbeat:
                 )
                 break
             except asyncio.TimeoutError:
-                renewed_until = self.repository.renew_job_lease(
+                renewed = self.repository.renew_lease(
                     self.job_id,
                     self.worker_id,
                     self.lease_seconds,
                 )
-                if renewed_until is None:
+                if not renewed:
                     self.lost_lease = True
+                    self.repository.add_scheduler_event(
+                        self.job_id,
+                        "job.lease.heartbeat_lost",
+                        {"worker_id": self.worker_id},
+                    )
                     logger.warning(
                         "job.lease.heartbeat_lost",
                         extra={"context": {"job_id": self.job_id, "worker_id": self.worker_id}},
                     )
                     return
+                self._renewal_count += 1
+                if self._renewal_count == 1 or self._renewal_count % 10 == 0:
+                    renewed_until = utcnow() + timedelta(seconds=self.lease_seconds)
+                    self.repository.add_scheduler_event(
+                        self.job_id,
+                        "job.lease.heartbeat",
+                        {
+                            "worker_id": self.worker_id,
+                            "lease_expires_at": renewed_until.isoformat(),
+                            "renewal_count": self._renewal_count,
+                        },
+                    )
                 logger.debug(
                     "job.lease.heartbeat_renewed",
                     extra={
                         "context": {
                             "job_id": self.job_id,
                             "worker_id": self.worker_id,
-                            "lease_expires_at": renewed_until.isoformat(),
+                            "renewal_count": self._renewal_count,
                         }
                     },
                 )
@@ -141,19 +165,31 @@ class OrchestratorService:
         privacy_mode = self.config.privacy.enabled if request.privacy_mode is None else request.privacy_mode
         prompt_to_store = request.prompt
         metadata = dict(request.metadata)
+        if backend_name == "codex_cli" and "use_git_worktree" not in metadata:
+            metadata["use_git_worktree"] = self.config.backends.codex_cli.use_git_worktree
+        metadata.setdefault("cleanup_policy", "none")
         if privacy_mode:
             prompt_to_store = "[stored_in_private_artifact]"
         request.backend = backend_name
         request.provider = provider_name
         request.model = request.model or metadata.get("model") or self._default_model_for_backend(backend_name)
+        job_id = str(uuid.uuid4())
+        workspace_result = prepare_job_workspace(self.config.workspace_path(self.root), job_id, metadata)
+        metadata.update(
+            {
+                key: value
+                for key, value in workspace_result.metadata_updates().items()
+                if value is not None
+            }
+        )
         request.metadata = metadata
         created = self.repository.create_job(
             request,
             prompt_to_store=prompt_to_store,
-            workspace_path=None,
+            workspace_path=workspace_result.workspace_path,
+            job_id=job_id,
         )
-        actual_workspace = prepare_job_workspace(self.config.workspace_path(self.root), created.id, metadata)
-        self.repository.set_workspace_path(created.id, actual_workspace)
+        actual_workspace = workspace_result.workspace_path
         if privacy_mode:
             metadata = dict(created.metadata)
             prompt_artifact_path = store_private_prompt(
@@ -171,7 +207,17 @@ class OrchestratorService:
         self.repository.add_scheduler_event(
             created.id,
             "workspace_initialized",
-            {"workspace_path": str(actual_workspace), "provider": provider_name, "backend": backend_name},
+            {
+                "workspace_path": str(actual_workspace),
+                "provider": provider_name,
+                "backend": backend_name,
+                "workspace_kind": workspace_result.workspace_kind,
+                "repo_path": str(workspace_result.repo_path) if workspace_result.repo_path else None,
+                "worktree_path": str(workspace_result.worktree_path) if workspace_result.worktree_path else None,
+                "branch_name": workspace_result.branch_name,
+                "base_branch": workspace_result.base_branch,
+                "cleanup_policy": workspace_result.cleanup_policy,
+            },
         )
         return self.repository.get_job(created.id)
 
@@ -195,11 +241,18 @@ class OrchestratorService:
         )
 
     def inspect(self, job_id: str) -> JobInspection:
+        stream_events = self.repository.get_stream_events(job_id, limit=200)
+        latest_stream_event = self.repository.get_latest_stream_event(job_id)
+        latest_phase, latest_progress_message = self._summarize_stream_activity(stream_events)
         return JobInspection(
             job=self.repository.get_job(job_id),
             state=self.repository.get_conversation_state(job_id),
             runs=self.repository.get_job_runs(job_id),
             events=self.repository.get_scheduler_events(job_id),
+            stream_events=stream_events,
+            latest_stream_event=latest_stream_event,
+            latest_phase=latest_phase,
+            latest_progress_message=latest_progress_message,
             artifacts=self.repository.get_artifacts(job_id),
         )
 
@@ -207,7 +260,11 @@ class OrchestratorService:
         return self.repository.requeue_due_retries()
 
     def cancel(self, job_id: str) -> Job:
-        return self.repository.request_cancel(job_id)
+        job = self.repository.request_cancel(job_id)
+        if job.status == JobStatus.CANCELLED:
+            self._maybe_cleanup_workspace(job, outcome="cancelled")
+            return self.repository.get_job(job_id)
+        return job
 
     def retry_job(self, job_id: str) -> Job:
         return self.repository.manual_retry(job_id)
@@ -285,13 +342,26 @@ class OrchestratorService:
             config=self.config,
             workspace_root=self.config.workspace_path(self.root),
             worker_id=worker_id,
+            emit_stream_event=lambda event_type, phase, message, metadata: self._emit_stream_event(
+                job,
+                event_type=event_type,
+                phase=phase,
+                message=message,
+                metadata=metadata,
+            ),
         )
         heartbeat = LeaseHeartbeat(
             self.repository,
             job_id=job.id,
             worker_id=worker_id,
             lease_seconds=self.config.effective_lease_seconds(),
-            heartbeat_interval_seconds=self.config.worker.heartbeat_interval_seconds,
+            heartbeat_interval_seconds=max(
+                0.01,
+                min(
+                    self.config.worker.heartbeat_interval_seconds,
+                    self.config.effective_lease_seconds() / 3,
+                ),
+            ),
         )
         run_id: Optional[str] = None
         request_payload: Dict[str, Any] = {}
@@ -560,7 +630,7 @@ class OrchestratorService:
     ) -> None:
         if result.updated_state is not None:
             self.repository.save_conversation_state(result.updated_state)
-        workspace = prepare_job_workspace(self.config.workspace_path(self.root), job.id, job.metadata)
+        workspace = prepare_job_workspace(self.config.workspace_path(self.root), job.id, job.metadata).workspace_path
         if result.output and self.config.privacy.store_response_artifacts:
             response_path = store_response_artifact(workspace, result.output)
             result.artifacts.append(
@@ -602,6 +672,7 @@ class OrchestratorService:
                 },
                 metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
+            self._maybe_cleanup_workspace(job, outcome="completed")
         elif result.status == JobStatus.QUEUED:
             metadata_updates, metadata_remove_keys = self._followup_metadata(job, result)
             self.repository.update_job_status(
@@ -637,6 +708,8 @@ class OrchestratorService:
                 event_detail={"target_status": result.status.value},
                 metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
+            if result.status in {JobStatus.FAILED, JobStatus.CANCELLED}:
+                self._maybe_cleanup_workspace(job, outcome=result.status.value)
 
     def _persist_failure(
         self,
@@ -688,6 +761,7 @@ class OrchestratorService:
                 event_detail={"reason": decision.reason},
                 metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
+            self._maybe_cleanup_workspace(job, outcome="cancelled")
         else:
             self.repository.update_job_status(
                 job.id,
@@ -700,6 +774,7 @@ class OrchestratorService:
                 event_detail={"reason": decision.reason, "headers": decision.headers},
                 metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
+            self._maybe_cleanup_workspace(job, outcome="failed")
 
     def _persist_interrupted(
         self,
@@ -753,6 +828,57 @@ class OrchestratorService:
         if backend_name in {"messages_api", "message_batches", "agent_sdk"}:
             return self.config.backends.messages_api.model or self.config.model
         return None
+
+    def _emit_stream_event(
+        self,
+        job: Job,
+        *,
+        event_type: str,
+        phase: Optional[str],
+        message: str,
+        metadata: Dict[str, object],
+    ) -> None:
+        self.repository.add_stream_event(
+            job_id=job.id,
+            provider=job.provider,
+            backend=job.backend,
+            event_type=event_type,
+            phase=phase,
+            message=message,
+            metadata={str(key): value for key, value in metadata.items()},
+        )
+
+    def _summarize_stream_activity(self, stream_events: Sequence[JobStreamEvent]) -> tuple[Optional[str], Optional[str]]:
+        latest_phase = next((event.phase for event in reversed(stream_events) if event.phase), None)
+        latest_progress_message = next((event.message for event in reversed(stream_events) if event.message), None)
+        return latest_phase, latest_progress_message
+
+    def _maybe_cleanup_workspace(self, job: Job, *, outcome: str) -> None:
+        latest_job = self.repository.get_job(job.id)
+        result = cleanup_job_workspace(
+            self.config.workspace_path(self.root),
+            latest_job.metadata,
+            outcome=outcome,
+        )
+        if result.cleaned:
+            self.repository.add_scheduler_event(
+                job.id,
+                "workspace.cleanup.completed",
+                {
+                    "workspace_kind": result.workspace_kind,
+                    "reason": result.reason,
+                    "cleaned_path": str(result.cleaned_path) if result.cleaned_path else None,
+                },
+            )
+        elif result.reason not in {"cleanup_disabled", "cleanup_skipped_for_outcome"}:
+            self.repository.add_scheduler_event(
+                job.id,
+                "workspace.cleanup.skipped",
+                {
+                    "workspace_kind": result.workspace_kind,
+                    "reason": result.reason,
+                },
+            )
 
     def _should_continue_job(
         self,

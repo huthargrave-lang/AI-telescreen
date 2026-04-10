@@ -122,6 +122,19 @@ class SchedulerEventRecord:
 
 
 @dataclass
+class JobStreamEvent:
+    id: str
+    job_id: str
+    provider: str
+    backend: str
+    timestamp: datetime
+    event_type: str
+    phase: Optional[str]
+    message: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class RetryDecision:
     disposition: RetryDisposition
     reason: str

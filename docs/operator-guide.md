@@ -6,7 +6,7 @@
 2. Export `ANTHROPIC_API_KEY`.
 3. Enqueue work with `claude-orchestrator enqueue --prompt-file task.txt` or `claude-orchestrator enqueue --backend codex_cli --prompt-file task.txt`.
 4. Start a worker with `claude-orchestrator run-worker`.
-5. Open the dashboard with the FastAPI app to inspect retries, errors, artifacts, provider, backend, and workspace details.
+5. Open the dashboard with the FastAPI app to inspect retries, errors, artifacts, provider, backend, workspace details, and live coding-agent activity.
 
 ## Provider and Backend
 
@@ -15,6 +15,20 @@
 - Provider is inferred from backend during enqueue unless you pass both explicitly.
 - A mismatch such as `provider=anthropic` with `backend=codex_cli` is rejected up front.
 
+## Coding Workspaces
+
+- Plain workspace mode creates an isolated directory under the configured workspace root.
+- Git worktree mode creates a dedicated branch and worktree under the workspace root while leaving the main repo working tree untouched.
+- Enable worktree mode per job with metadata such as `repo_path`, `use_git_worktree`, and `base_branch`.
+- Cleanup is metadata-driven via `cleanup_policy` and defaults to `none`.
+- Automatic cleanup only targets app-created workspaces and skips dirty worktrees to avoid destroying user-visible changes.
+
+## Live Activity
+
+- `codex_cli` jobs emit durable stream events while running.
+- Recent progress is visible in `inspect JOB_ID`, `/api/jobs/{job_id}/stream-events`, and the job detail page.
+- Common event types include `process_started`, `stdout_line`, `stderr_line`, `phase_changed`, `process_completed`, and `process_interrupted`.
+
 ## Recovery Playbook
 
 - `waiting_retry` means the retry scheduler has already classified the failure as transient and recorded the next attempt time.
@@ -22,7 +36,7 @@
 - `failed` means the failure was classified as permanent or attempts were exhausted; use `retry JOB_ID` only after correcting the root cause.
 - On restart, stale `running` jobs are moved back into a recoverable state during worker startup.
 - During normal execution, running jobs renew their leases with background heartbeats. If the worker shuts down mid-run, interrupted jobs are persisted back into a recoverable retry state instead of being left `running`.
-- `codex_cli` jobs are durable and inspectable like Anthropic jobs, but they currently run as bounded subprocesses rather than streamed event sessions.
+- For subprocess-backed `codex_cli` jobs, worker shutdown also terminates the active subprocess and records a durable interruption event before scheduling a retry.
 
 ## Questions to Answer Quickly
 

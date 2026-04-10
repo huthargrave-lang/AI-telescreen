@@ -141,6 +141,14 @@ if typer is not None:  # pragma: no branch
                 "last_error_code": job.last_error_code,
                 "last_error_message": job.last_error_message,
                 "workspace_path": job.workspace_path,
+                "workspace_kind": job.metadata.get("workspace_kind"),
+                "repo_path": job.metadata.get("repo_path"),
+                "worktree_path": job.metadata.get("worktree_path"),
+                "branch_name": job.metadata.get("branch_name"),
+                "base_branch": job.metadata.get("base_branch"),
+                "cleanup_policy": job.metadata.get("cleanup_policy"),
+                "lease_owner": job.lease_owner,
+                "lease_expires_at": job.lease_expires_at.isoformat() if job.lease_expires_at else None,
                 "metadata": job.metadata,
             },
             "state": {
@@ -170,6 +178,18 @@ if typer is not None:  # pragma: no branch
                 }
                 for event in details.events[-15:]
             ],
+            "stream_events": [
+                {
+                    "timestamp": event.timestamp.isoformat(),
+                    "event_type": event.event_type,
+                    "phase": event.phase,
+                    "message": event.message,
+                    "metadata": event.metadata,
+                }
+                for event in details.stream_events[-20:]
+            ],
+            "latest_phase": details.latest_phase,
+            "latest_progress_message": details.latest_progress_message,
             "artifacts": [
                 {
                     "created_at": artifact.created_at.isoformat(),
@@ -193,6 +213,16 @@ if typer is not None:  # pragma: no branch
         typer.echo(f"  followup: {job.metadata.get('followup_type') or job.metadata.get('resume_hint') or 'n/a'}")
         typer.echo(f"  last_error: {job.last_error_code} {job.last_error_message}")
         typer.echo(f"  workspace: {job.workspace_path}")
+        typer.echo(f"  workspace_kind: {job.metadata.get('workspace_kind') or 'directory'}")
+        typer.echo(f"  repo_path: {job.metadata.get('repo_path') or 'n/a'}")
+        typer.echo(f"  worktree_path: {job.metadata.get('worktree_path') or 'n/a'}")
+        typer.echo(f"  branch_name: {job.metadata.get('branch_name') or 'n/a'}")
+        typer.echo(f"  base_branch: {job.metadata.get('base_branch') or 'n/a'}")
+        typer.echo(f"  cleanup_policy: {job.metadata.get('cleanup_policy') or 'none'}")
+        typer.echo(f"  lease_owner: {job.lease_owner or 'n/a'}")
+        typer.echo(f"  lease_expiry: {job.lease_expires_at or 'n/a'}")
+        typer.echo(f"  latest_phase: {details.latest_phase or 'n/a'}")
+        typer.echo(f"  latest_progress: {details.latest_progress_message or 'n/a'}")
         typer.echo(f"  compact_summary: {details.state.compact_summary or 'n/a'}")
         typer.echo(f"  tool_context: {json.dumps(details.state.tool_context)}")
         if details.runs:
@@ -204,6 +234,11 @@ if typer is not None:  # pragma: no branch
         typer.echo("  recent events:")
         for event in details.events[-10:]:
             typer.echo(f"    - {event.timestamp.isoformat()} {event.event_type} {json.dumps(event.detail)}")
+        typer.echo("  recent stream events:")
+        for event in details.stream_events[-10:]:
+            typer.echo(
+                f"    - {event.timestamp.isoformat()} {event.event_type} phase={event.phase or '-'} {event.message}"
+            )
 
     @app.command("cancel")
     def cancel_command(
@@ -234,9 +269,12 @@ if typer is not None:  # pragma: no branch
         orchestrator, _ = _build_services(config)
         jobs = orchestrator.list_jobs(status=status, provider=provider, backend=backend, limit=limit)
         for job in jobs:
+            details = orchestrator.inspect(job.id)
             typer.echo(
                 f"{job.id} {job.status.value:13} provider={job.provider:10} backend={job.backend:16} "
                 f"priority={job.priority:3} attempts={job.attempt_count}/{job.max_attempts} "
+                f"workspace={job.metadata.get('workspace_kind') or 'directory':12} "
+                f"phase={details.latest_phase or '-':12} "
                 f"followup={job.metadata.get('followup_type') or job.metadata.get('resume_hint') or '-'}"
             )
 

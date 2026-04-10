@@ -15,6 +15,7 @@ from .models import (
     EnqueueJobRequest,
     Job,
     JobRun,
+    JobStreamEvent,
     JobStatus,
     ProviderName,
     SchedulerEventRecord,
@@ -57,13 +58,14 @@ class JobRepository:
         *,
         prompt_to_store: str,
         workspace_path: Optional[Path],
+        job_id: Optional[str] = None,
     ) -> Job:
         now = utcnow()
         existing = self.get_job_by_idempotency_key(request.idempotency_key) if request.idempotency_key else None
         if existing:
             return existing
 
-        job_id = str(uuid.uuid4())
+        job_id = job_id or str(uuid.uuid4())
         with self.db.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -327,7 +329,7 @@ class JobRepository:
             )
         return self.get_job(job_id)
 
-    def renew_job_lease(self, job_id: str, worker_id: str, lease_seconds: float) -> Optional[datetime]:
+    def renew_lease(self, job_id: str, worker_id: str, lease_seconds: float) -> bool:
         """Renew a running-job lease only if the current worker still owns it."""
 
         now = utcnow()
@@ -352,21 +354,13 @@ class JobRepository:
                     worker_id,
                 ),
             )
-            if updated.rowcount == 1:
-                connection.execute(
-                    """
-                    INSERT INTO scheduler_events (id, job_id, timestamp, event_type, detail_json)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(uuid.uuid4()),
-                        job_id,
-                        to_iso8601(now),
-                        "job.lease.renewed",
-                        _dumps({"worker_id": worker_id, "lease_expires_at": to_iso8601(expires_at)}),
-                    ),
-                )
-        if updated.rowcount != 1:
+        return updated.rowcount == 1
+
+    def renew_job_lease(self, job_id: str, worker_id: str, lease_seconds: float) -> Optional[datetime]:
+        """Compatibility wrapper that returns the new expiry on success."""
+
+        expires_at = utcnow() + timedelta(seconds=lease_seconds)
+        if not self.renew_lease(job_id, worker_id, lease_seconds):
             return None
         return expires_at
 
@@ -706,6 +700,58 @@ class JobRepository:
                 ),
             )
 
+    def add_stream_event(
+        self,
+        *,
+        job_id: str,
+        provider: str,
+        backend: str,
+        event_type: str,
+        message: str = "",
+        phase: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> JobStreamEvent:
+        now = utcnow()
+        record = JobStreamEvent(
+            id=str(uuid.uuid4()),
+            job_id=job_id,
+            provider=provider,
+            backend=backend,
+            timestamp=now,
+            event_type=event_type,
+            phase=phase,
+            message=message,
+            metadata=dict(metadata or {}),
+        )
+        with self.db.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO job_stream_events (
+                    id,
+                    job_id,
+                    provider,
+                    backend,
+                    timestamp,
+                    event_type,
+                    phase,
+                    message,
+                    metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record.id,
+                    record.job_id,
+                    record.provider,
+                    record.backend,
+                    to_iso8601(record.timestamp),
+                    record.event_type,
+                    record.phase,
+                    record.message,
+                    _dumps(record.metadata),
+                ),
+            )
+        return record
+
     def add_artifact(self, record: ArtifactRecord) -> None:
         with self.db.connect() as connection:
             connection.execute(
@@ -777,6 +823,33 @@ class JobRepository:
             )
             for row in rows
         ]
+
+    def get_stream_events(self, job_id: str, limit: int = 200) -> List[JobStreamEvent]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM job_stream_events
+                WHERE job_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (job_id, limit),
+            ).fetchall()
+        events = [self._row_to_stream_event(row) for row in rows]
+        return list(reversed(events))
+
+    def get_latest_stream_event(self, job_id: str) -> Optional[JobStreamEvent]:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM job_stream_events
+                WHERE job_id = ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (job_id,),
+            ).fetchone()
+        return self._row_to_stream_event(row) if row else None
 
     def export_logs(self) -> List[Dict[str, Any]]:
         with self.db.connect() as connection:
@@ -1011,4 +1084,17 @@ class JobRepository:
             headers=_loads(row["headers_json"]),
             error=_loads(row["error_json"]),
             exit_reason=row["exit_reason"],
+        )
+
+    def _row_to_stream_event(self, row: Any) -> JobStreamEvent:
+        return JobStreamEvent(
+            id=row["id"],
+            job_id=row["job_id"],
+            provider=row["provider"],
+            backend=row["backend"],
+            timestamp=from_iso8601(row["timestamp"]) or utcnow(),
+            event_type=row["event_type"],
+            phase=row["phase"],
+            message=row["message"],
+            metadata=_loads(row["metadata_json"]),
         )

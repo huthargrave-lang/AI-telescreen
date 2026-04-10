@@ -7,7 +7,8 @@
       <th>Status</th>
       <th>Priority</th>
       <th>Attempts</th>
-      <th>Model / Workspace</th>
+      <th>Workspace</th>
+      <th>Phase / Activity</th>
       <th>Retry / Error</th>
     </tr>
   </thead>
@@ -21,8 +22,15 @@
         <td>{{ job.priority }}</td>
         <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
         <td>
-          <div>{{ job.model or "n/a" }}</div>
+          <div>{{ job.metadata.get("workspace_kind") or "directory" }}</div>
           <div class="meta">{{ job.workspace_path or "workspace pending" }}</div>
+          {% if job.branch_name %}
+            <div class="meta">branch {{ job.branch_name }}</div>
+          {% endif %}
+        </td>
+        <td>
+          <div>{{ job.latest_phase or "n/a" }}</div>
+          <div class="meta">{{ job.latest_progress_message or job.last_activity_at }}</div>
         </td>
         <td>
           {% if job.next_retry_at %}
@@ -37,7 +45,7 @@
       </tr>
     {% else %}
       <tr>
-        <td colspan="8" class="meta">No jobs recorded yet.</td>
+        <td colspan="9" class="meta">No jobs recorded yet.</td>
       </tr>
     {% endfor %}
   </tbody>

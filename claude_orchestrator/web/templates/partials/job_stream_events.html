@@ -1,0 +1,43 @@
+<section class="panel">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+    <div>
+      <h2 style="margin:0;">Live Activity</h2>
+      <div class="meta">Durable process events, recent progress lines, and inferred execution phase.</div>
+    </div>
+    {% if latest_phase %}
+      <span class="pill">Phase: {{ latest_phase }}</span>
+    {% endif %}
+  </div>
+
+  <p style="margin-top: 14px;"><strong>Latest progress:</strong> {{ latest_progress_message or "n/a" }}</p>
+
+  {% if stream_events %}
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Type</th>
+          <th>Phase</th>
+          <th>Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in stream_events[-30:] %}
+          <tr>
+            <td>{{ event.timestamp.isoformat() }}</td>
+            <td>{{ event.event_type }}</td>
+            <td>{{ event.phase or "n/a" }}</td>
+            <td>
+              <div>{{ event.message or "n/a" }}</div>
+              {% if event.metadata %}
+                <div class="meta"><code>{{ event.metadata | tojson }}</code></div>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="meta" style="margin-top:14px;">No stream events recorded yet.</p>
+  {% endif %}
+</section>

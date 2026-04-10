@@ -20,22 +20,12 @@
   </div>
 
   <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
-    <section class="panel">
-      <h2 style="margin-top:0;">Overview</h2>
-      <p><strong>Status:</strong> <span class="status-{{ job.status.value }}">{{ job.status.value }}</span></p>
-      <p><strong>Provider:</strong> {{ job.provider }}</p>
-      <p><strong>Backend:</strong> {{ job.backend }}</p>
-      <p><strong>Model:</strong> {{ job.model or "n/a" }}</p>
-      <p><strong>Created:</strong> {{ job.created_at.isoformat() }}</p>
-      <p><strong>Updated:</strong> {{ job.updated_at.isoformat() }}</p>
-      <p><strong>Next retry:</strong> {{ job.next_retry_at.isoformat() if job.next_retry_at else "n/a" }}</p>
-      <p><strong>Last error code:</strong> {{ job.last_error_code or "n/a" }}</p>
-      <p><strong>Last error:</strong> {{ job.last_error_message or "n/a" }}</p>
-      <p><strong>Workspace:</strong> {{ job.workspace_path or "n/a" }}</p>
-      <p><strong>Lease owner:</strong> {{ job.lease_owner or "n/a" }}</p>
-      <p><strong>Lease expiry:</strong> {{ job.lease_expires_at.isoformat() if job.lease_expires_at else "n/a" }}</p>
-      <pre>{{ job.metadata | tojson(indent=2) }}</pre>
-    </section>
+    <div
+      id="job-overview"
+      {% if is_active %}hx-get="/partials/jobs/{{ job.id }}/overview" hx-trigger="load, every {{ refresh_seconds }}s" hx-swap="innerHTML"{% endif %}
+    >
+      {% include "partials/job_overview.html" %}
+    </div>
 
     <section class="panel">
       <h2 style="margin-top:0;">Conversation State</h2>
@@ -44,6 +34,14 @@
       <p><strong>Checkpoint:</strong> {{ state.last_checkpoint_at.isoformat() if state.last_checkpoint_at else "n/a" }}</p>
       <pre>{{ state.tool_context | tojson(indent=2) }}</pre>
     </section>
+  </div>
+
+  <div
+    id="job-stream-events"
+    style="margin-top:18px;"
+    {% if is_active %}hx-get="/partials/jobs/{{ job.id }}/stream-events" hx-trigger="load, every {{ refresh_seconds }}s" hx-swap="innerHTML"{% endif %}
+  >
+    {% include "partials/job_stream_events.html" %}
   </div>
 
   <section class="panel" style="margin-top:18px;">

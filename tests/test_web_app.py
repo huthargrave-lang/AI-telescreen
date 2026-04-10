@@ -58,12 +58,21 @@ def test_web_app_renders_provider_and_backend_filters(tmp_path):
         repository=context.repository,
         backends=context.backends,
     )
-    orchestrator.enqueue(
+    job = orchestrator.enqueue(
         EnqueueJobRequest(
             backend="codex_cli",
             task_type="code",
             prompt="inspect repo",
         )
+    )
+    context.repository.add_stream_event(
+        job_id=job.id,
+        provider=job.provider,
+        backend=job.backend,
+        event_type="phase_changed",
+        phase="planning",
+        message="Planning repository analysis.",
+        metadata={"source": "stdout"},
     )
 
     app = build_app(root=tmp_path, config_path=config_path)
@@ -71,9 +80,18 @@ def test_web_app_renders_provider_and_backend_filters(tmp_path):
 
     dashboard = client.get("/")
     filtered = client.get("/api/jobs", params={"provider": "openai"})
+    detail = client.get(f"/api/jobs/{filtered.json()['jobs'][0]['id']}")
+    stream = client.get(f"/api/jobs/{filtered.json()['jobs'][0]['id']}/stream-events")
+    html_detail = client.get(f"/jobs/{filtered.json()['jobs'][0]['id']}")
 
     assert dashboard.status_code == 200
     assert "openai" in dashboard.text
     assert "codex_cli" in dashboard.text
     assert filtered.status_code == 200
     assert filtered.json()["jobs"][0]["provider"] == "openai"
+    assert detail.status_code == 200
+    assert "stream_events" in detail.json()
+    assert stream.status_code == 200
+    assert html_detail.status_code == 200
+    assert "Live Activity" in html_detail.text
+    assert "planning" in html_detail.text

@@ -14,6 +14,7 @@ This project is intentionally compliance-bounded:
 The codebase is one-language Python and splits responsibilities cleanly:
 
 - `claude_orchestrator/repository.py`: durable SQLite persistence for jobs, runs, conversation state, artifacts, scheduler events, and message batch metadata.
+- `claude_orchestrator/workspaces.py`: safe per-job workspace preparation, optional git worktree creation, and conservative cleanup helpers.
 - `claude_orchestrator/services/orchestrator.py`: central orchestration logic for enqueue, retry, cancel, crash recovery, batch polling, and state transitions.
 - `claude_orchestrator/services/worker.py`: scheduler/worker loop with concurrency limits and duplicate-claim prevention.
 - `claude_orchestrator/backends/`: pluggable backend adapters.
@@ -57,7 +58,61 @@ Optional wrapper for explicitly configured documented CLI flows. It does not ass
 
 ### `codex_cli` (`provider=openai`)
 
-Optional wrapper for explicitly configured Codex CLI flows. It is intentionally bounded: configurable executable and command template, timeout handling, capped stdout/stderr capture, retry classification for transient CLI failures, and no browser automation or consumer-site state.
+Optional wrapper for explicitly configured Codex CLI flows. It is intentionally bounded: configurable executable and command template, timeout handling, capped stdout/stderr capture, retry classification for transient CLI failures, durable incremental stream events, and no browser automation or consumer-site state.
+
+## Workspaces and Worktrees
+
+Coding jobs now run in real isolated workspaces:
+
+- Default mode: an app-created directory under the configured `workspace_root`
+- Optional mode: a dedicated git worktree under `workspace_root/<job-id>/worktree`
+
+Worktree-backed jobs use metadata such as:
+
+- `repo_path`
+- `use_git_worktree`
+- `base_branch`
+- `branch_name`
+- `cleanup_policy`
+
+The orchestrator persists the resulting `workspace_path`, `worktree_path`, `branch_name`, `base_branch`, and `workspace_kind` back onto the job so the CLI and dashboard can inspect them.
+
+Example enqueue for a worktree-backed Codex job:
+
+```bash
+claude-orchestrator enqueue \
+  --backend codex_cli \
+  --prompt-file task.txt \
+  --metadata '{"repo_path":"/path/to/repo","use_git_worktree":true,"base_branch":"main","cleanup_policy":"none"}'
+```
+
+Cleanup remains conservative by default:
+
+- `cleanup_policy="none"` is the default
+- `cleanup_policy="on_success"` removes only app-created workspaces after successful completion
+- `cleanup_policy="on_completion"` removes only app-created workspaces after any terminal state
+
+The original repository working tree is never deleted. For git worktrees, cleanup is skipped if the worktree contains user-visible changes.
+
+## Stream Events
+
+Long-running coding jobs now emit durable execution stream events into a dedicated SQLite table:
+
+- `process_started`
+- `stdout_line`
+- `stderr_line`
+- `phase_changed`
+- `process_completed`
+- `process_failed`
+- `process_timeout`
+- `process_interrupted`
+
+These are exposed in:
+
+- `claude-orchestrator inspect JOB_ID`
+- `/api/jobs/{job_id}`
+- `/api/jobs/{job_id}/stream-events`
+- the job detail page's live activity panel
 
 ## Job State Model
 
@@ -94,10 +149,12 @@ SQLite tables:
 - `conversation_state`
 - `artifacts`
 - `scheduler_events`
+- `job_stream_events`
 - `message_batches`
 
 Migrations live in [`claude_orchestrator/migrations/0001_initial.sql`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/migrations/0001_initial.sql).
 Provider support is added in [`claude_orchestrator/migrations/0002_add_provider_columns.sql`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/migrations/0002_add_provider_columns.sql).
+Stream event support is added in [`claude_orchestrator/migrations/0003_add_job_stream_events.sql`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/migrations/0003_add_job_stream_events.sql).
 
 ## Installation
 
@@ -187,11 +244,14 @@ The dashboard is a lightweight FastAPI + Jinja2 app with HTMX polling. It shows:
 - state counts
 - recent jobs across Anthropic and OpenAI providers
 - provider/backend badges and workspace paths
+- workspace kind, branch/worktree indicators, and recent phase/activity
 - retry timing
 - last error summaries
 - job detail pages
+- live progress panels for active codex_cli jobs
 - retry/cancel actions
 - JSON status endpoints at `/api/status`, `/api/jobs`, and `/api/jobs/{job_id}`
+- JSON stream endpoint at `/api/jobs/{job_id}/stream-events`
 - simple provider/backend/status filtering
 
 To run it:
@@ -229,11 +289,13 @@ Workers call recovery on startup:
 3. Otherwise schedule a safe retry using the normal retry policy.
 
 During normal execution, background heartbeats keep leases fresh so long-running jobs are not falsely recovered. During shutdown, workers stop claiming new jobs, wait for active work up to a configurable drain timeout, then cancel and persist interrupted jobs into recoverable retry states.
+For subprocess-backed Codex jobs, cancellation also terminates the active child process and records an interruption event before the job is moved into a recoverable retry state.
 
 ## Current Limitations
 
-- `codex_cli` is a bounded subprocess backend in this pass. It does not yet stream events into the UI.
-- Workspace preparation is now structured for future git worktree support, but full worktree lifecycle management is still a later pass.
+- `codex_cli` remains a bounded subprocess backend in this pass rather than a full interactive session protocol.
+- The current live activity model is polling-based and deliberately simple; it does not use websockets.
+- Workspace cleanup is intentionally conservative and defaults to `none`.
 - The dashboard is intentionally operational and lightweight rather than a full multi-agent control plane.
 
 ## Tests
