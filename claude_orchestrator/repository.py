@@ -91,10 +91,11 @@ class JobRepository:
                     idempotency_key,
                     model,
                     workspace_path,
+                    project_id,
                     cancel_requested,
                     lease_owner,
                     lease_expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -115,6 +116,7 @@ class JobRepository:
                     request.idempotency_key,
                     request.model,
                     str(workspace_path) if workspace_path else None,
+                    request.metadata.get("project_id"),
                     0,
                     None,
                     None,
@@ -347,6 +349,75 @@ class JobRepository:
         if row is None:
             raise KeyError(f"Unknown project: {project_id}")
         return self._row_to_saved_project(row)
+
+    def update_saved_project(
+        self,
+        project_id: str,
+        *,
+        name: str,
+        repo_path: str,
+        default_backend: Optional[str],
+        default_provider: Optional[str],
+        default_base_branch: Optional[str],
+        default_use_git_worktree: bool,
+        notes: Optional[str],
+    ) -> SavedProject:
+        now = utcnow()
+        with self.db.connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE saved_projects
+                SET
+                    name = ?,
+                    repo_path = ?,
+                    default_backend = ?,
+                    default_provider = ?,
+                    default_base_branch = ?,
+                    default_use_git_worktree = ?,
+                    notes = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    name,
+                    repo_path,
+                    default_backend,
+                    default_provider,
+                    default_base_branch,
+                    1 if default_use_git_worktree else 0,
+                    notes,
+                    to_iso8601(now),
+                    project_id,
+                ),
+            )
+        if updated.rowcount == 0:
+            raise KeyError(f"Unknown project: {project_id}")
+        return self.get_saved_project(project_id)
+
+    def list_project_jobs(self, project_id: str, *, limit: int = 20) -> List[Job]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE project_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (project_id, limit),
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
+
+    def list_recent_jobs(self, *, limit: int = 100) -> List[Job]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
 
     def claim_job(self, job_id: str, worker_id: str, lease_seconds: float = 300) -> Optional[Job]:
         now = utcnow()
@@ -1156,10 +1227,10 @@ class JobRepository:
             connection.execute(
                 """
                 UPDATE jobs
-                SET metadata_json = ?, updated_at = ?
+                SET metadata_json = ?, project_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (_dumps(metadata), to_iso8601(now), job_id),
+                (_dumps(metadata), metadata.get("project_id"), to_iso8601(now), job_id),
             )
 
     def set_workspace_path(self, job_id: str, workspace_path: Path) -> None:
@@ -1175,6 +1246,9 @@ class JobRepository:
             )
 
     def _row_to_job(self, row: Any) -> Job:
+        metadata = _loads(row["metadata_json"])
+        if "project_id" in row.keys() and row["project_id"] and not metadata.get("project_id"):
+            metadata["project_id"] = row["project_id"]
         return Job(
             id=row["id"],
             created_at=from_iso8601(row["created_at"]) or utcnow(),
@@ -1185,7 +1259,7 @@ class JobRepository:
             task_type=row["task_type"],
             priority=row["priority"],
             prompt=row["prompt"],
-            metadata=_loads(row["metadata_json"]),
+            metadata=metadata,
             attempt_count=row["attempt_count"],
             next_retry_at=from_iso8601(row["next_retry_at"]),
             last_error_code=row["last_error_code"],

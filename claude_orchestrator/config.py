@@ -117,6 +117,7 @@ class CodexCliBackendConfig:
     args: List[str] = field(default_factory=list)
     command_template: List[str] = field(default_factory=list)
     timeout_seconds: int = 1800
+    smoke_test_timeout_seconds: int = 15
     auth_mode: str = "auto"
     use_git_worktree: bool = False
     max_output_bytes: int = 1048576
@@ -284,6 +285,7 @@ enabled = false
 executable = "codex"
 args = []
 timeout_seconds = 1800
+smoke_test_timeout_seconds = 15
 auth_mode = "auto"
 use_git_worktree = false
 max_output_bytes = 1048576

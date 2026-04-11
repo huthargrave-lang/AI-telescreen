@@ -151,6 +151,37 @@ def test_saved_project_round_trip(tmp_path):
     assert projects[0].id == project.id
 
 
+def test_saved_project_update_round_trip(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    project = orchestrator.create_saved_project(
+        name="Editable Repo",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="before",
+    )
+
+    updated = orchestrator.update_saved_project(
+        project.id,
+        name="Edited Repo",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="release",
+        default_use_git_worktree=True,
+        notes="after",
+    )
+
+    loaded = repository.get_saved_project(project.id)
+
+    assert updated.name == "Edited Repo"
+    assert loaded.default_base_branch == "release"
+    assert loaded.default_use_git_worktree is True
+    assert loaded.notes == "after"
+
+
 def test_launch_job_from_project_and_duplicate_job(tmp_path):
     orchestrator, repository, _ = build_test_orchestrator(tmp_path)
     project = orchestrator.create_saved_project(
@@ -179,6 +210,7 @@ def test_launch_job_from_project_and_duplicate_job(tmp_path):
     assert duplicate.id != launched.id
     assert duplicate.metadata["project_id"] == project.id
     assert duplicate.metadata["repo_path"] == str(tmp_path.resolve())
+    assert repository.list_project_jobs(project.id, limit=10)[0].id == duplicate.id
     assert repository.get_job(duplicate.id).status == JobStatus.QUEUED
 
 

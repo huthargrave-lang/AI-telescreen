@@ -11,6 +11,7 @@
     <div class="toolbar">
       <a class="pill" href="/jobs/new">Create Job</a>
       <a class="pill" href="/projects/new">Add Project</a>
+      <a class="pill" href="/doctor">Doctor</a>
       <div class="pill">Refresh every {{ refresh_seconds }}s</div>
     </div>
   </div>
@@ -30,10 +31,11 @@
       <div class="split">
         <div>
           <h2 style="margin:0;">Projects</h2>
-          <div class="meta">Saved repos and launch defaults for browser-first job creation.</div>
+          <div class="meta">Saved repos, edit-ready defaults, and recent launch entry points for browser-first job creation.</div>
         </div>
         <div class="toolbar">
           <a class="pill" href="/projects">Open Projects</a>
+          <a class="pill" href="/doctor">Doctor</a>
           <a class="pill" href="/jobs/new">Create Job</a>
         </div>
       </div>
@@ -64,6 +66,7 @@
                   <div class="toolbar">
                     <a class="pill" href="/jobs/new?project_id={{ project.id }}">Launch Job</a>
                     <a class="pill" href="/projects/{{ project.id }}">Open</a>
+                    <a class="pill" href="/projects/{{ project.id }}/edit">Edit</a>
                   </div>
                 </td>
               </tr>
@@ -86,6 +89,9 @@
       <form method="post" action="/worker/run-once?next=/">
         <button type="submit">Process Due Jobs Once</button>
       </form>
+      <div class="toolbar" style="margin-top: 12px;">
+        <a class="pill" href="/doctor">Open Doctor</a>
+      </div>
     </section>
   </div>
 

@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Doctor · AI Telescreen{% endblock %}
+{% block body %}
+  <div class="header">
+    <div>
+      <a href="/">← Back</a>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">Doctor</h1>
+      <p class="subtitle">Operational checks for configuration, backends, integrations, and the Codex smoke test.</p>
+    </div>
+    <div class="toolbar">
+      <a class="pill" href="/doctor">Refresh Diagnostics</a>
+      <a class="pill" href="/projects">Projects</a>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
+    <section class="panel">
+      <h2 style="margin-top:0;">Runtime</h2>
+      <div class="meta-list">
+        <div><strong>App:</strong> {{ report.app_name }}</div>
+        <div><strong>Config:</strong> {{ report.config_path or "default config only" }}</div>
+        <div><strong>Default backend:</strong> {{ report.default_backend }}</div>
+        <div><strong>Enabled backends:</strong> {{ report.enabled_backends | join(", ") }}</div>
+        <div><strong>Workspace root:</strong> {{ report.workspace_root }}</div>
+        <div><strong>Database:</strong> {{ report.database_path }}</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 style="margin-top:0;">Codex Smoke Test</h2>
+      {% set codex = report.smoke_tests.get("codex_cli") %}
+      {% if codex %}
+        <p><strong>Status:</strong> {{ codex.status }}</p>
+        <p>{{ codex.summary }}</p>
+        {% if codex.details %}
+          <div class="meta-list">
+            {% for key, value in codex.details.items() %}
+              {% if value %}
+                <div><strong>{{ key.replace("_", " ")|title }}:</strong> {{ value }}</div>
+              {% endif %}
+            {% endfor %}
+          </div>
+        {% endif %}
+        {% if codex.warnings %}
+          <div style="margin-top: 12px;">
+            <strong>Warnings</strong>
+            <ul>
+              {% for warning in codex.warnings %}
+                <li>{{ warning }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="meta">Codex smoke test is only run when `codex_cli` is enabled.</p>
+      {% endif %}
+    </section>
+  </div>
+
+  {% if report.warnings %}
+    <section class="panel" style="margin-top: 18px;">
+      <h2 style="margin-top:0;">Warnings</h2>
+      <ul>
+        {% for warning in report.warnings %}
+          <li>{{ warning }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  <section class="panel" style="margin-top: 18px;">
+    <h2 style="margin-top:0;">Checks</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Summary</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for check in report.checks %}
+          <tr>
+            <td>{{ check.name }}</td>
+            <td>{{ check.status }}</td>
+            <td>{{ check.summary }}</td>
+            <td>
+              {% if check.details %}
+                <div class="meta-list">
+                  {% for key, value in check.details.items() %}
+                    {% if value %}
+                      <div><strong>{{ key.replace("_", " ")|title }}:</strong> {{ value }}</div>
+                    {% endif %}
+                  {% endfor %}
+                </div>
+              {% else %}
+                <span class="meta">n/a</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

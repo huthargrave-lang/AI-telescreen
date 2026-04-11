@@ -6,7 +6,8 @@
 2. Export `ANTHROPIC_API_KEY`.
 3. Open the AI Telescreen dashboard and create or launch a job from the browser.
 4. Start a worker with `claude-orchestrator run-worker`.
-5. Use the browser for job monitoring, retry, cancel, duplication, saved-project launch, and optional one-pass worker cycles.
+5. Open `/doctor` when you need a quick health check for config, backends, integrations, and Codex availability.
+6. Use the browser for job monitoring, retry, cancel, duplication, saved-project launch, project editing, recent-launch history, and optional one-pass worker cycles.
 
 ## Provider and Backend
 
@@ -24,12 +25,15 @@
 - Automatic cleanup only targets app-created workspaces and skips dirty worktrees to avoid destroying user-visible changes.
 - `codex_cli` now relies on subprocess `cwd` for workspace context instead of passing a `--workspace` flag.
 - The preferred Codex invocation shape is `codex exec PROMPT`, with static extra args configured in `backends.codex_cli.args` when needed.
+- The Codex smoke test uses a short read-only ephemeral `codex exec` prompt so operators can distinguish missing executables, invalid config, auth problems, and plausible runnability.
 
 ## Browser-First Operations
 
 - The dashboard is now the primary operator surface.
 - Use `Create Job` to launch ad hoc work without touching the terminal.
 - Use saved projects to prefill repo, backend, provider, base branch, and worktree defaults.
+- Use the project edit page to adjust defaults without recreating the project.
+- Use the doctor page for browser-based backend and environment diagnostics.
 - Job detail pages support retry, cancel, duplicate, and re-run/edit flows.
 - The browser also exposes a lightweight `Process Due Jobs Once` control for ad hoc worker passes.
 - Continuous background processing still works best with `claude-orchestrator run-worker`.
@@ -39,6 +43,15 @@
 - Saved projects are first-class launch targets stored in SQLite.
 - A project captures `name`, `repo_path`, default backend/provider, default base branch, default worktree preference, and notes.
 - Launching from a project preserves those defaults while still using the same orchestration service path as CLI-created jobs.
+- Project detail pages now show recent launches tied back to that project via a durable `project_id` job link.
+
+## Diagnostics
+
+- Open `/doctor` in the browser for the current AI Telescreen health report.
+- `claude-orchestrator doctor` exposes the same report in the terminal.
+- `claude-orchestrator smoke-test codex_cli` runs the explicit Codex smoke test on demand.
+- The doctor report includes config summary, backend checks, `git` availability, integration discovery status, and the Codex smoke-test result when applicable.
+- The smoke test is confidence-building only. It does not guarantee that every real job prompt, repo, model, or network condition will behave the same way.
 
 ## Integration Awareness
 
@@ -69,6 +82,8 @@
 
 - Why is the job paused?
   Look at `inspect JOB_ID`, `inspect JOB_ID --json`, or the most recent `scheduler_events` entry.
+- Is Codex callable and plausibly authenticated from this machine?
+  Open `/doctor` or run `claude-orchestrator smoke-test codex_cli`.
 - Is this job local-only or integration-enabled?
   Look at the integration section in `inspect JOB_ID`, the job detail page, or `/api/jobs/{job_id}`.
 - When will it retry?

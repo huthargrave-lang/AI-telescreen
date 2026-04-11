@@ -34,6 +34,7 @@ def _build_services(config_path: Optional[Path] = None) -> tuple[OrchestratorSer
         config=context.config,
         repository=context.repository,
         backends=context.backends,
+        config_path=context.config_path,
     )
     worker = WorkerService(context.repository, orchestrator)
     return orchestrator, worker
@@ -58,6 +59,38 @@ def _integration_payload(details) -> dict:
         "summary": summary_payload,
         "backend_support": details.backend_integration_support,
     }
+
+
+def _print_diagnostics(orchestrator: OrchestratorService) -> None:
+    report = orchestrator.collect_diagnostics(run_smoke_tests=True)
+    typer.echo(f"app: {report.app_name}")
+    typer.echo(f"config path: {report.config_path or 'default config only'}")
+    typer.echo(f"sqlite: {report.database_path}")
+    typer.echo(f"default backend: {report.default_backend}")
+    typer.echo(f"enabled backends: {', '.join(report.enabled_backends)}")
+    typer.echo(f"workspace root: {report.workspace_root}")
+    typer.echo(f"privacy mode: {orchestrator.config.privacy.enabled}")
+    typer.echo(f"lease seconds: {orchestrator.config.effective_lease_seconds()}")
+    typer.echo(f"heartbeat interval: {orchestrator.config.worker.heartbeat_interval_seconds}")
+    typer.echo("checks:")
+    for check in report.checks:
+        typer.echo(f"  - {check.name}: {check.status} :: {check.summary}")
+        for key, value in check.details.items():
+            if value:
+                typer.echo(f"      {key}: {value}")
+    if report.smoke_tests:
+        typer.echo("smoke tests:")
+        for result in report.smoke_tests.values():
+            typer.echo(f"  - {result.backend}: {result.status} :: {result.summary}")
+            for key, value in result.details.items():
+                if value:
+                    typer.echo(f"      {key}: {value}")
+            for warning in result.warnings:
+                typer.echo(f"      warning: {warning}")
+    if report.warnings:
+        typer.echo("warnings:")
+        for warning in report.warnings:
+            typer.echo(f"  - {warning}")
 
 
 if typer is not None:  # pragma: no branch
@@ -352,14 +385,22 @@ if typer is not None:  # pragma: no branch
         config: Optional[Path] = typer.Option(None, "--config", help="Config TOML path."),
     ) -> None:
         orchestrator, _ = _build_services(config)
-        typer.echo(f"sqlite: {orchestrator.config.sqlite_path(Path.cwd())}")
-        typer.echo(f"default backend: {orchestrator.config.default_backend}")
-        typer.echo("provider/backend split: provider is inferred from backend unless --provider is supplied.")
-        typer.echo(f"enabled backends: {', '.join(sorted(orchestrator.backends))}")
-        typer.echo(f"workspace root: {orchestrator.config.workspace_path(Path.cwd())}")
-        typer.echo(f"privacy mode: {orchestrator.config.privacy.enabled}")
-        typer.echo(f"lease seconds: {orchestrator.config.effective_lease_seconds()}")
-        typer.echo(f"heartbeat interval: {orchestrator.config.worker.heartbeat_interval_seconds}")
+        _print_diagnostics(orchestrator)
+
+    @app.command("smoke-test")
+    def smoke_test_command(
+        backend: str = typer.Argument("codex_cli", help="Backend name to smoke-test."),
+        config: Optional[Path] = typer.Option(None, "--config", help="Config TOML path."),
+    ) -> None:
+        orchestrator, _ = _build_services(config)
+        result = orchestrator.run_backend_smoke_test(backend)
+        typer.echo(f"{result.backend}: {result.status}")
+        typer.echo(result.summary)
+        for key, value in result.details.items():
+            if value:
+                typer.echo(f"{key}: {value}")
+        for warning in result.warnings:
+            typer.echo(f"warning: {warning}")
 
 else:
     app = None

@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Add Project · AI Telescreen{% endblock %}
+{% block title %}{{ page_title }} · AI Telescreen{% endblock %}
 {% block body %}
   <div class="header">
     <div>
-      <a href="/">← Back</a>
-      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">Add Project</h1>
-      <p class="subtitle">Register a repository once, then launch jobs with browser-friendly defaults.</p>
+      <a href="{{ cancel_href }}">← Back</a>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ page_title }}</h1>
+      <p class="subtitle">{{ page_subtitle }}</p>
     </div>
   </div>
 
@@ -13,7 +13,7 @@
     {% if error %}
       <p style="color: var(--danger); margin-top: 0;">{{ error }}</p>
     {% endif %}
-    <form method="post" action="/projects" class="form-grid">
+    <form method="post" action="{{ form_action }}" class="form-grid">
       <label>
         <span class="meta">Name</span><br />
         <input type="text" name="name" value="{{ form_values.name }}" required />
@@ -57,8 +57,8 @@
         <textarea name="notes">{{ form_values.notes }}</textarea>
       </label>
       <div class="full toolbar">
-        <button type="submit">Save Project</button>
-        <a class="pill" href="/projects">Cancel</a>
+        <button type="submit">{{ submit_label }}</button>
+        <a class="pill" href="{{ cancel_href }}">Cancel</a>
       </div>
     </form>
   </section>

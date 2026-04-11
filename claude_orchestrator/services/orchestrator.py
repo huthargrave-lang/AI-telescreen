@@ -5,13 +5,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import shutil
+import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from ..backends.codex_cli import CodexCliBackend
+from ..backends.factory import validate_backend_config
 from ..config import AppConfig
+from ..diagnostics import BackendSmokeTestResult, DiagnosticCheck, DiagnosticsReport
 from ..integrations import (
     WorkspaceIntegrationSummary,
     build_integration_metadata_summary,
@@ -30,7 +36,7 @@ from ..models import (
 )
 from ..providers import infer_provider, validate_provider_backend
 from ..repository import JobRepository
-from ..retry import RetryPolicy, RetryableBackendError, UserCancelledError
+from ..retry import ConfigurationError, RetryPolicy, RetryableBackendError, UserCancelledError
 from ..timeutils import utcnow
 from ..workspaces import cleanup_job_workspace, prepare_job_workspace, resolve_job_prompt, store_private_prompt, store_response_artifact
 from ..backends.base import BackendAdapter, BatchCapableBackend, BackendContext
@@ -148,11 +154,13 @@ class OrchestratorService:
         config: AppConfig,
         repository: JobRepository,
         backends: Dict[str, object],
+        config_path: Optional[Path] = None,
     ) -> None:
         self.root = root
         self.config = config
         self.repository = repository
         self.backends = backends
+        self.config_path = config_path
         self.retry_policy = RetryPolicy(config.retry)
 
     def enqueue(self, request: EnqueueJobRequest) -> Job:
@@ -284,6 +292,32 @@ class OrchestratorService:
             notes=notes,
         )
 
+    def update_saved_project(
+        self,
+        project_id: str,
+        *,
+        name: str,
+        repo_path: str,
+        default_backend: Optional[str] = None,
+        default_provider: Optional[str] = None,
+        default_base_branch: Optional[str] = None,
+        default_use_git_worktree: bool = False,
+        notes: Optional[str] = None,
+    ) -> SavedProject:
+        resolved_repo_path = Path(repo_path).expanduser().resolve()
+        if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
+            raise ValueError(f"Repository path does not exist or is not a directory: {resolved_repo_path}")
+        return self.repository.update_saved_project(
+            project_id,
+            name=name,
+            repo_path=str(resolved_repo_path),
+            default_backend=default_backend,
+            default_provider=default_provider,
+            default_base_branch=default_base_branch,
+            default_use_git_worktree=default_use_git_worktree,
+            notes=notes,
+        )
+
     def launch_job_from_project(
         self,
         project_id: str,
@@ -346,6 +380,412 @@ class OrchestratorService:
                 privacy_mode=bool(original.metadata.get("prompt_artifact_path")),
             )
         )
+
+    def list_project_jobs(self, project_id: str, *, limit: int = 20) -> List[Job]:
+        project = self.repository.get_saved_project(project_id)
+        explicit_jobs = self.repository.list_project_jobs(project_id, limit=limit)
+        recent_jobs = self.repository.list_recent_jobs(limit=max(limit * 10, 50))
+        merged: Dict[str, Job] = {job.id: job for job in explicit_jobs}
+        for job in recent_jobs:
+            if job.id in merged:
+                continue
+            if job.metadata.get("project_id") == project_id or job.metadata.get("repo_path") == project.repo_path:
+                merged[job.id] = job
+        return sorted(merged.values(), key=lambda job: job.created_at, reverse=True)[:limit]
+
+    def get_project_integration_summary(self, project_id: str) -> WorkspaceIntegrationSummary:
+        project = self.repository.get_saved_project(project_id)
+        project_path = Path(project.repo_path).expanduser()
+        repo_path = project_path if (project_path / ".git").exists() else None
+        return self._discover_integration_summary(project_path, repo_path)
+
+    def run_backend_smoke_test(self, backend_name: str) -> BackendSmokeTestResult:
+        if backend_name != "codex_cli":
+            raise ValueError(f"Smoke tests are not implemented for backend: {backend_name}")
+        return self.run_codex_smoke_test()
+
+    def run_codex_smoke_test(self) -> BackendSmokeTestResult:
+        backend = self.backends.get("codex_cli")
+        if backend is None:
+            return BackendSmokeTestResult(
+                backend="codex_cli",
+                provider="openai",
+                ok=False,
+                status="disabled",
+                summary="codex_cli is disabled in the current AI Telescreen config.",
+                details={"enabled": "false"},
+            )
+
+        codex_backend = backend if isinstance(backend, CodexCliBackend) else CodexCliBackend(self.config)
+        try:
+            resolved = codex_backend.resolve_executable()
+        except ConfigurationError as exc:
+            return BackendSmokeTestResult(
+                backend="codex_cli",
+                provider="openai",
+                ok=False,
+                status="invalid_config",
+                summary=str(exc),
+                details={
+                    "enabled": str(self.config.backends.codex_cli.enabled).lower(),
+                    "configured_executable": self.config.backends.codex_cli.executable,
+                },
+            )
+
+        warnings: List[str] = []
+        if self.config.backends.codex_cli.args:
+            warnings.append(
+                "The smoke test ignores configured codex_cli.args so it can stay read-only and predictable."
+            )
+
+        version_output = ""
+        try:
+            version_run = subprocess.run(
+                [resolved, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                cwd=str(self.root),
+            )
+            version_output = (version_run.stdout or version_run.stderr or "").strip()
+            if version_run.returncode != 0:
+                warnings.append("`codex --version` returned a non-zero exit code during diagnostics.")
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            warnings.append(f"Unable to collect Codex version output: {exc}")
+
+        smoke_prompt = "Reply with exactly: AI Telescreen codex smoke test OK"
+        command = codex_backend.build_smoke_test_command(smoke_prompt)
+        timeout_seconds = self.config.backends.codex_cli.smoke_test_timeout_seconds
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                cwd=str(self.root),
+            )
+        except FileNotFoundError as exc:
+            return BackendSmokeTestResult(
+                backend="codex_cli",
+                provider="openai",
+                ok=False,
+                status="missing_executable",
+                summary=str(exc),
+                details={"resolved_executable": resolved},
+                warnings=warnings,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout_preview = ((exc.stdout or "") if isinstance(exc.stdout, str) else (exc.stdout or b"").decode("utf-8", errors="replace")).strip()[:500]
+            stderr_preview = ((exc.stderr or "") if isinstance(exc.stderr, str) else (exc.stderr or b"").decode("utf-8", errors="replace")).strip()[:500]
+            return BackendSmokeTestResult(
+                backend="codex_cli",
+                provider="openai",
+                ok=False,
+                status="timed_out",
+                summary="Codex started but did not finish the smoke test before the timeout.",
+                details={
+                    "resolved_executable": resolved,
+                    "timeout_seconds": str(timeout_seconds),
+                    "version": version_output,
+                    "stdout_preview": stdout_preview,
+                    "stderr_preview": stderr_preview,
+                },
+                warnings=warnings,
+            )
+
+        stdout_text = (completed.stdout or "").strip()
+        stderr_text = (completed.stderr or "").strip()
+        if completed.returncode != 0:
+            classified_error = codex_backend.classify_cli_failure(
+                stderr_text=stderr_text,
+                stdout_text=stdout_text,
+            )
+            status = "exec_failed"
+            if isinstance(classified_error, RetryableBackendError):
+                status = "transient_error"
+            elif any(
+                token in f"{stderr_text}\n{stdout_text}".lower()
+                for token in ("auth", "login", "api key", "unauthorized", "forbidden")
+            ):
+                status = "auth_error"
+            return BackendSmokeTestResult(
+                backend="codex_cli",
+                provider="openai",
+                ok=False,
+                status=status,
+                summary=str(classified_error),
+                details={
+                    "resolved_executable": resolved,
+                    "timeout_seconds": str(timeout_seconds),
+                    "version": version_output,
+                    "returncode": str(completed.returncode),
+                    "stdout_preview": stdout_text[:500],
+                    "stderr_preview": stderr_text[:500],
+                },
+                warnings=warnings,
+            )
+
+        return BackendSmokeTestResult(
+            backend="codex_cli",
+            provider="openai",
+            ok=True,
+            status="ok",
+            summary="Codex CLI completed a minimal read-only smoke test successfully.",
+            details={
+                "resolved_executable": resolved,
+                "timeout_seconds": str(timeout_seconds),
+                "version": version_output,
+                "stdout_preview": stdout_text[:500],
+                "stderr_preview": stderr_text[:500],
+            },
+            warnings=warnings,
+        )
+
+    def collect_diagnostics(self, *, run_smoke_tests: bool = True) -> DiagnosticsReport:
+        report = DiagnosticsReport(
+            config_path=str(self.config_path) if self.config_path else None,
+            default_backend=self.config.default_backend,
+            enabled_backends=sorted(self.backends.keys()),
+            workspace_root=str(self.config.workspace_path(self.root)),
+            database_path=str(self.config.sqlite_path(self.root)),
+        )
+
+        try:
+            validate_backend_config(self.config)
+            report.checks.append(
+                DiagnosticCheck(
+                    name="configuration",
+                    ok=True,
+                    status="valid",
+                    summary="Runtime configuration passed validation.",
+                    details={
+                        "default_backend": self.config.default_backend,
+                        "enabled_backends": ", ".join(sorted(self.backends.keys())),
+                    },
+                )
+            )
+        except ValueError as exc:
+            report.checks.append(
+                DiagnosticCheck(
+                    name="configuration",
+                    ok=False,
+                    status="invalid",
+                    summary="Runtime configuration validation failed.",
+                    details={"error": str(exc)},
+                )
+            )
+
+        report.checks.append(
+            DiagnosticCheck(
+                name="database",
+                ok=self.config.sqlite_path(self.root).exists(),
+                status="present" if self.config.sqlite_path(self.root).exists() else "missing",
+                summary=(
+                    "SQLite database is initialized."
+                    if self.config.sqlite_path(self.root).exists()
+                    else "SQLite database file has not been created yet."
+                ),
+                details={"path": str(self.config.sqlite_path(self.root))},
+            )
+        )
+
+        git_path = shutil.which("git")
+        report.checks.append(
+            DiagnosticCheck(
+                name="git",
+                ok=git_path is not None,
+                status="available" if git_path else "missing",
+                summary="Git is available for repo-aware workspace operations."
+                if git_path
+                else "Git is not available on PATH.",
+                details={"path": git_path or ""},
+            )
+        )
+
+        anthropic_env = self.config.backends.messages_api.api_key_env
+        anthropic_key_present = bool(os.getenv(anthropic_env))
+        report.checks.append(
+            DiagnosticCheck(
+                name="messages_api",
+                ok=anthropic_key_present,
+                status="configured" if anthropic_key_present else "missing_api_key",
+                summary=(
+                    "Anthropic API environment looks configured for messages_api."
+                    if anthropic_key_present
+                    else f"Environment variable {anthropic_env} is not set."
+                ),
+                details={"api_key_env": anthropic_env},
+            )
+        )
+
+        report.checks.append(
+            DiagnosticCheck(
+                name="message_batches",
+                ok=not self.config.backends.message_batches.enabled or anthropic_key_present,
+                status=(
+                    "disabled"
+                    if not self.config.backends.message_batches.enabled
+                    else ("configured" if anthropic_key_present else "missing_api_key")
+                ),
+                summary=(
+                    "message_batches is disabled."
+                    if not self.config.backends.message_batches.enabled
+                    else (
+                        "Message Batches can use the configured Anthropic key."
+                        if anthropic_key_present
+                        else f"message_batches needs {anthropic_env} to be set."
+                    )
+                ),
+                details={"enabled": str(self.config.backends.message_batches.enabled).lower()},
+            )
+        )
+
+        agent_env = self.config.backends.agent_sdk.api_key_env
+        agent_key_present = bool(os.getenv(agent_env))
+        report.checks.append(
+            DiagnosticCheck(
+                name="agent_sdk",
+                ok=not self.config.backends.agent_sdk.enabled or agent_key_present,
+                status=(
+                    "disabled"
+                    if not self.config.backends.agent_sdk.enabled
+                    else ("configured" if agent_key_present else "missing_api_key")
+                ),
+                summary=(
+                    "agent_sdk is disabled."
+                    if not self.config.backends.agent_sdk.enabled
+                    else (
+                        "agent_sdk has the required Anthropic API key environment."
+                        if agent_key_present
+                        else f"agent_sdk needs {agent_env} to be set."
+                    )
+                ),
+                details={
+                    "enabled": str(self.config.backends.agent_sdk.enabled).lower(),
+                    "api_key_env": agent_env,
+                },
+            )
+        )
+
+        claude_executable = shutil.which(self.config.backends.claude_code_cli.executable)
+        report.checks.append(
+            DiagnosticCheck(
+                name="claude_code_cli",
+                ok=(
+                    not self.config.backends.claude_code_cli.enabled
+                    or (
+                        bool(self.config.backends.claude_code_cli.command_template)
+                        and claude_executable is not None
+                    )
+                ),
+                status=(
+                    "disabled"
+                    if not self.config.backends.claude_code_cli.enabled
+                    else (
+                        "configured"
+                        if self.config.backends.claude_code_cli.command_template and claude_executable is not None
+                        else "invalid_config"
+                    )
+                ),
+                summary=(
+                    "claude_code_cli is disabled."
+                    if not self.config.backends.claude_code_cli.enabled
+                    else (
+                        "Claude Code CLI executable and command template are configured."
+                        if self.config.backends.claude_code_cli.command_template and claude_executable is not None
+                        else "Claude Code CLI needs an executable on PATH and a non-empty command_template."
+                    )
+                ),
+                details={
+                    "enabled": str(self.config.backends.claude_code_cli.enabled).lower(),
+                    "configured_executable": self.config.backends.claude_code_cli.executable,
+                    "resolved_executable": claude_executable or "",
+                },
+            )
+        )
+
+        codex_executable = shutil.which(self.config.backends.codex_cli.executable)
+        report.checks.append(
+            DiagnosticCheck(
+                name="codex_cli",
+                ok=(
+                    not self.config.backends.codex_cli.enabled
+                    or (
+                        codex_executable is not None
+                        and self.config.backends.codex_cli.timeout_seconds > 0
+                        and self.config.backends.codex_cli.smoke_test_timeout_seconds > 0
+                    )
+                ),
+                status=(
+                    "disabled"
+                    if not self.config.backends.codex_cli.enabled
+                    else (
+                        "configured"
+                        if codex_executable is not None
+                        and self.config.backends.codex_cli.timeout_seconds > 0
+                        and self.config.backends.codex_cli.smoke_test_timeout_seconds > 0
+                        else "invalid_config"
+                    )
+                ),
+                summary=(
+                    "codex_cli is disabled."
+                    if not self.config.backends.codex_cli.enabled
+                    else (
+                        "Codex CLI executable and timeout settings look valid."
+                        if codex_executable is not None
+                        and self.config.backends.codex_cli.timeout_seconds > 0
+                        and self.config.backends.codex_cli.smoke_test_timeout_seconds > 0
+                        else "Codex CLI needs an executable on PATH and positive timeout settings."
+                    )
+                ),
+                details={
+                    "enabled": str(self.config.backends.codex_cli.enabled).lower(),
+                    "configured_executable": self.config.backends.codex_cli.executable,
+                    "resolved_executable": codex_executable or "",
+                    "timeout_seconds": str(self.config.backends.codex_cli.timeout_seconds),
+                    "smoke_test_timeout_seconds": str(self.config.backends.codex_cli.smoke_test_timeout_seconds),
+                },
+            )
+        )
+
+        current_repo_path = self.root if (self.root / ".git").exists() else None
+        integration_summary = self._discover_integration_summary(self.root, current_repo_path)
+        report.checks.append(
+            DiagnosticCheck(
+                name="integration_discovery",
+                ok=True,
+                status=integration_summary.status(),
+                summary=(
+                    "Integration discovery completed for the current workspace."
+                    if integration_summary.capabilities or integration_summary.config_paths
+                    else "No project or user integration configuration was discovered for the current workspace."
+                ),
+                details={
+                    "workspace_path": integration_summary.workspace_path,
+                    "repo_path": integration_summary.repo_path or "",
+                    "config_paths": ", ".join(integration_summary.config_paths),
+                    "capability_count": str(len(integration_summary.capabilities)),
+                },
+            )
+        )
+
+        if run_smoke_tests and self.config.backends.codex_cli.enabled:
+            smoke_test = self.run_codex_smoke_test()
+            report.smoke_tests["codex_cli"] = smoke_test
+            report.warnings.extend(smoke_test.warnings)
+
+        enabled_coding_backends = {
+            name for name in self.backends.keys() if name in {"agent_sdk", "claude_code_cli", "codex_cli"}
+        }
+        if not enabled_coding_backends:
+            report.warnings.append("No coding-oriented backend is currently enabled.")
+        if git_path is None and (
+            self.config.backends.codex_cli.use_git_worktree
+            or any(project.default_use_git_worktree for project in self.repository.list_saved_projects())
+        ):
+            report.warnings.append("Git worktree defaults are configured, but git is not available on PATH.")
+
+        return report
 
     def inspect(self, job_id: str) -> JobInspection:
         job = self.repository.get_job(job_id)

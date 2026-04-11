@@ -85,6 +85,8 @@ def validate_backend_config(config: AppConfig) -> None:
             errors.append(f"codex_cli executable {executable!r} is not on PATH.")
         if config.backends.codex_cli.timeout_seconds <= 0:
             errors.append("codex_cli timeout_seconds must be greater than zero.")
+        if config.backends.codex_cli.smoke_test_timeout_seconds <= 0:
+            errors.append("codex_cli smoke_test_timeout_seconds must be greater than zero.")
         if config.backends.codex_cli.max_output_bytes <= 0:
             errors.append("codex_cli max_output_bytes must be greater than zero.")
 

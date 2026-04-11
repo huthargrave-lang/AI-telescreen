@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs
@@ -39,6 +40,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         config=context.config,
         repository=context.repository,
         backends=context.backends,
+        config_path=context.config_path,
     )
     templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
     app = FastAPI(title="AI Telescreen")
@@ -141,6 +143,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         *,
         form_values: Optional[dict] = None,
         error: Optional[str] = None,
+        project=None,
     ) -> dict:
         values = {
             "name": "",
@@ -159,6 +162,16 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "available_backends": _available_backends(),
             "available_providers": _available_providers(),
             "error": error,
+            "project": project,
+            "page_title": "Edit Project" if project else "Add Project",
+            "page_subtitle": (
+                "Update launch defaults and repository notes for this saved project."
+                if project
+                else "Register a repository once, then launch jobs with browser-friendly defaults."
+            ),
+            "form_action": f"/projects/{project.id}/edit" if project else "/projects",
+            "submit_label": "Save Changes" if project else "Save Project",
+            "cancel_href": f"/projects/{project.id}" if project else "/projects",
         }
 
     def _coerce_checkbox(value) -> bool:
@@ -266,6 +279,13 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "metadata": job.metadata,
         }
 
+    def serialize_project_integration(summary) -> dict:
+        return {
+            "status": summary.status(),
+            "labels": summary.status_labels(),
+            "summary": summary.to_dict(),
+        }
+
     @app.get("/", response_class=HTMLResponse)
     async def dashboard(request: Request):
         return templates.TemplateResponse(
@@ -291,6 +311,20 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             name="partials/job_table.html",
             context=context_data,
         )
+
+    @app.get("/doctor", response_class=HTMLResponse)
+    async def doctor_page(request: Request):
+        report = await asyncio.to_thread(orchestrator.collect_diagnostics, run_smoke_tests=True)
+        return templates.TemplateResponse(
+            request=request,
+            name="doctor.html",
+            context={"request": request, "report": report},
+        )
+
+    @app.get("/api/doctor")
+    async def api_doctor():
+        report = await asyncio.to_thread(orchestrator.collect_diagnostics, run_smoke_tests=True)
+        return report.to_dict()
 
     @app.get("/jobs/new", response_class=HTMLResponse)
     async def new_job(request: Request, project_id: Optional[str] = None, from_job: Optional[str] = None):
@@ -535,14 +569,74 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             )
         return RedirectResponse(url=f"/projects/{project.id}", status_code=303)
 
+    @app.get("/projects/{project_id}/edit", response_class=HTMLResponse)
+    async def edit_project(request: Request, project_id: str):
+        project = orchestrator.get_saved_project(project_id)
+        return templates.TemplateResponse(
+            request=request,
+            name="project_new.html",
+            context=_project_form_context(
+                request,
+                project=project,
+                form_values={
+                    "name": project.name,
+                    "repo_path": project.repo_path,
+                    "default_backend": project.default_backend or orchestrator.config.default_backend,
+                    "default_provider": project.default_provider or "",
+                    "default_base_branch": project.default_base_branch or "",
+                    "default_use_git_worktree": project.default_use_git_worktree,
+                    "notes": project.notes or "",
+                },
+            ),
+        )
+
+    @app.post("/projects/{project_id}/edit", response_class=HTMLResponse)
+    async def update_project(request: Request, project_id: str):
+        project = orchestrator.get_saved_project(project_id)
+        form = await _parse_form_values(request)
+        form_values = {
+            "name": str(form.get("name") or ""),
+            "repo_path": str(form.get("repo_path") or ""),
+            "default_backend": str(form.get("default_backend") or orchestrator.config.default_backend),
+            "default_provider": str(form.get("default_provider") or ""),
+            "default_base_branch": str(form.get("default_base_branch") or ""),
+            "default_use_git_worktree": _coerce_checkbox(form.get("default_use_git_worktree")),
+            "notes": str(form.get("notes") or ""),
+        }
+        try:
+            if not form_values["name"].strip():
+                raise ValueError("Project name is required.")
+            if not form_values["repo_path"].strip():
+                raise ValueError("Repository path is required.")
+            orchestrator.update_saved_project(
+                project_id,
+                name=form_values["name"].strip(),
+                repo_path=form_values["repo_path"].strip(),
+                default_backend=form_values["default_backend"] or None,
+                default_provider=form_values["default_provider"] or None,
+                default_base_branch=form_values["default_base_branch"] or None,
+                default_use_git_worktree=form_values["default_use_git_worktree"],
+                notes=form_values["notes"].strip() or None,
+            )
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="project_new.html",
+                context=_project_form_context(
+                    request,
+                    project=project,
+                    form_values=form_values,
+                    error=str(exc),
+                ),
+                status_code=400,
+            )
+        return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
+
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
     async def project_detail(request: Request, project_id: str):
         project = orchestrator.get_saved_project(project_id)
-        jobs = [
-            job
-            for job in orchestrator.list_jobs(limit=200)
-            if job.metadata.get("project_id") == project_id or job.metadata.get("repo_path") == project.repo_path
-        ]
+        jobs = [serialize_job(job) for job in orchestrator.list_project_jobs(project_id, limit=20)]
+        integration_summary = orchestrator.get_project_integration_summary(project_id)
         return templates.TemplateResponse(
             request=request,
             name="project_detail.html",
@@ -550,6 +644,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "request": request,
                 "project": project,
                 "jobs": jobs,
+                "integration": serialize_project_integration(integration_summary),
             },
         )
 

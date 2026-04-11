@@ -9,6 +9,8 @@
     </div>
     <div class="toolbar">
       <a class="pill" href="/jobs/new?project_id={{ project.id }}">Customize Launch</a>
+      <a class="pill" href="/projects/{{ project.id }}/edit">Edit Project</a>
+      <a class="pill" href="/doctor">Doctor</a>
     </div>
   </div>
 
@@ -20,6 +22,41 @@
       <p><strong>Base branch:</strong> {{ project.default_base_branch or "n/a" }}</p>
       <p><strong>Use git worktree:</strong> {{ project.default_use_git_worktree }}</p>
       <p><strong>Notes:</strong> {{ project.notes or "n/a" }}</p>
+    </section>
+
+    <section class="panel">
+      <h2 style="margin-top:0;">Integrations</h2>
+      <p><strong>Status:</strong> {{ integration.status }}</p>
+      <p><strong>Labels:</strong> {{ integration.labels | join(", ") }}</p>
+      {% if integration.summary.config_paths %}
+        <div class="meta-list">
+          {% for config_path in integration.summary.config_paths %}
+            <div><strong>Config:</strong> {{ config_path }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% if integration.summary.capabilities %}
+        <div style="margin-top: 12px;">
+          <strong>Capabilities</strong>
+          <ul>
+            {% for capability in integration.summary.capabilities %}
+              <li>{{ capability.name }} · {{ capability.source }} · {{ capability.kind }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% else %}
+        <p class="meta">No explicit project or user integration config was discovered for this repo.</p>
+      {% endif %}
+      {% if integration.summary.notes %}
+        <div style="margin-top: 12px;">
+          <strong>Notes</strong>
+          <ul>
+            {% for note in integration.summary.notes %}
+              <li>{{ note }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
     </section>
 
     <section class="panel">
@@ -50,7 +87,7 @@
   </div>
 
   <section class="panel" style="margin-top: 18px;">
-    <h2 style="margin-top:0;">Recent Jobs</h2>
+    <h2 style="margin-top:0;">Recent Launches</h2>
     {% if jobs %}
       <table>
         <thead>
@@ -58,22 +95,28 @@
             <th>Job</th>
             <th>Status</th>
             <th>Backend</th>
+            <th>Provider</th>
+            <th>Attempts</th>
             <th>Activity</th>
+            <th>Error</th>
           </tr>
         </thead>
         <tbody>
           {% for job in jobs %}
             <tr>
               <td><a href="/jobs/{{ job.id }}"><code>{{ job.id }}</code></a></td>
-              <td>{{ job.status.value }}</td>
+              <td>{{ job.status }}</td>
               <td>{{ job.backend }}</td>
-              <td>{{ job.metadata.get("workspace_kind") or "directory" }}</td>
+              <td>{{ job.provider }}</td>
+              <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
+              <td>{{ job.latest_phase or job.latest_progress_message or job.last_activity_at }}</td>
+              <td>{{ job.last_error_message or "n/a" }}</td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     {% else %}
-      <p class="meta">No jobs launched from this project yet.</p>
+      <p class="meta">No recent launches are associated with this project yet.</p>
     {% endif %}
   </section>
 {% endblock %}

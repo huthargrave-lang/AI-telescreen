@@ -116,7 +116,7 @@ class CodexCliBackend(BackendAdapter):
     def _uses_legacy_command_template(self) -> bool:
         return bool(self.config.backends.codex_cli.command_template)
 
-    def _build_command(self, *, workspace: Path, prompt: str) -> List[str]:
+    def resolve_executable(self) -> str:
         backend_config = self.config.backends.codex_cli
         if not backend_config.enabled:
             raise ConfigurationError("codex_cli backend is disabled in config.")
@@ -127,6 +127,36 @@ class CodexCliBackend(BackendAdapter):
             raise ConfigurationError(f"Codex executable not found on PATH: {executable}")
         if Path(resolved).name in self.SHELL_EXECUTABLES:
             raise ConfigurationError("Shell wrappers are not allowed for codex_cli command execution.")
+        return resolved
+
+    def build_smoke_test_command(self, prompt: str) -> List[str]:
+        resolved = self.resolve_executable()
+        return [
+            resolved,
+            "exec",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "read-only",
+            "--json",
+            "--color",
+            "never",
+            "--ephemeral",
+            prompt,
+        ]
+
+    def classify_cli_failure(self, *, stderr_text: str, stdout_text: str) -> Exception:
+        lowered = f"{stderr_text}\n{stdout_text}".lower()
+        message = stderr_text or stdout_text or "Codex CLI exited with a non-zero code."
+        if any(token in lowered for token in ("auth", "login", "api key", "unauthorized", "forbidden")):
+            return PermanentBackendError(message)
+        if any(token in lowered for token in ("rate limit", "temporarily unavailable", "timeout", "timed out")):
+            return RetryableBackendError(message)
+        if any(token in lowered for token in ("connection", "network", "unavailable", "try again")):
+            return RetryableBackendError(message)
+        return PermanentBackendError(message)
+
+    def _build_command(self, *, workspace: Path, prompt: str) -> List[str]:
+        resolved = self.resolve_executable()
 
         if self._uses_legacy_command_template():
             prompt_file = workspace / "codex_prompt.txt"
@@ -165,15 +195,7 @@ class CodexCliBackend(BackendAdapter):
         return [resolved, *base_args, prompt]
 
     def _raise_for_failure(self, *, stderr_text: str, stdout_text: str) -> None:
-        lowered = f"{stderr_text}\n{stdout_text}".lower()
-        message = stderr_text or stdout_text or "Codex CLI exited with a non-zero code."
-        if any(token in lowered for token in ("auth", "login", "api key", "unauthorized", "forbidden")):
-            raise PermanentBackendError(message)
-        if any(token in lowered for token in ("rate limit", "temporarily unavailable", "timeout", "timed out")):
-            raise RetryableBackendError(message)
-        if any(token in lowered for token in ("connection", "network", "unavailable", "try again")):
-            raise RetryableBackendError(message)
-        raise PermanentBackendError(message)
+        raise self.classify_cli_failure(stderr_text=stderr_text, stdout_text=stdout_text)
 
     async def _run_subprocess(
         self,

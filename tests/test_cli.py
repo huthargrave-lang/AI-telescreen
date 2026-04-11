@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from claude_orchestrator.bootstrap import bootstrap
+from claude_orchestrator.diagnostics import BackendSmokeTestResult, DiagnosticCheck, DiagnosticsReport
 from claude_orchestrator.cli import app
 from claude_orchestrator.integrations import (
     IntegrationCapability,
@@ -91,3 +92,55 @@ def test_cli_inspect_shows_workspace_and_stream_metadata(tmp_path, monkeypatch):
     assert "integration_capabilities:" in result.output
     assert "github [github_tool]" in result.output
     assert "recent stream events:" in result.output
+
+
+def test_cli_doctor_and_smoke_test_commands(tmp_path, monkeypatch):
+    runner = CliRunner()
+    monkeypatch.chdir(tmp_path)
+
+    report = DiagnosticsReport(
+        config_path=str(tmp_path / "claude-orchestrator.toml"),
+        default_backend="codex_cli",
+        enabled_backends=["codex_cli", "messages_api"],
+        workspace_root=str(tmp_path / "workspaces"),
+        database_path=str(tmp_path / "data" / "claude-orchestrator.db"),
+        checks=[
+            DiagnosticCheck(
+                name="codex_cli",
+                ok=True,
+                status="configured",
+                summary="Codex CLI is configured.",
+                details={"resolved_executable": "/usr/bin/codex"},
+            )
+        ],
+        smoke_tests={
+            "codex_cli": BackendSmokeTestResult(
+                backend="codex_cli",
+                provider="openai",
+                ok=True,
+                status="ok",
+                summary="Codex smoke passed.",
+                details={"version": "codex 1.2.3"},
+            )
+        },
+    )
+    smoke = BackendSmokeTestResult(
+        backend="codex_cli",
+        provider="openai",
+        ok=True,
+        status="ok",
+        summary="Codex smoke passed.",
+        details={"version": "codex 1.2.3"},
+    )
+
+    monkeypatch.setattr(OrchestratorService, "collect_diagnostics", lambda self, run_smoke_tests=True: report)
+    monkeypatch.setattr(OrchestratorService, "run_backend_smoke_test", lambda self, backend: smoke)
+
+    doctor_result = runner.invoke(app, ["doctor"])
+    smoke_result = runner.invoke(app, ["smoke-test", "codex_cli"])
+
+    assert doctor_result.exit_code == 0
+    assert "checks:" in doctor_result.output
+    assert "Codex smoke passed." in doctor_result.output
+    assert smoke_result.exit_code == 0
+    assert "codex_cli: ok" in smoke_result.output

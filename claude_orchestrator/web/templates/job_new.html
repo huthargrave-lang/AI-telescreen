@@ -9,6 +9,7 @@
     </div>
     <div class="toolbar">
       <a class="pill" href="/projects">Projects</a>
+      <a class="pill" href="/doctor">Doctor</a>
     </div>
   </div>
 
@@ -76,7 +77,10 @@
         </div>
       </label>
       {% if selected_project %}
-        <div class="full meta">Prefilled from project <a href="/projects/{{ selected_project.id }}">{{ selected_project.name }}</a>.</div>
+        <div class="full meta">
+          Prefilled from project <a href="/projects/{{ selected_project.id }}">{{ selected_project.name }}</a>.
+          New jobs from this form stay associated with that project for recent-launch history.
+        </div>
       {% endif %}
       <div class="full toolbar">
         <button type="submit">Create Job</button>

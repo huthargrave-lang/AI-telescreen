@@ -69,6 +69,8 @@ The preferred Codex path is now:
 
 On this machine, the installed Codex CLI exposes `codex exec [PROMPT]`, so AI Telescreen defaults to that non-interactive form when `backends.codex_cli.args` is empty. Legacy `command_template` config is still accepted for backward compatibility, but it is no longer the recommended style.
 
+AI Telescreen also includes a small Codex smoke test for confidence-building diagnostics. It resolves the configured executable, captures version output, and runs a short read-only ephemeral `codex exec` prompt with a bounded timeout so operators can quickly distinguish missing executables, bad config, likely auth problems, and plausible runnability. The smoke test is intentionally conservative: it does not prove that every real Codex job will succeed, only that the basic local invocation path appears healthy.
+
 ## Workspaces and Worktrees
 
 Coding jobs now run in real isolated workspaces:
@@ -133,10 +135,12 @@ AI Telescreen is now web-first for normal operator control:
 
 - create jobs from the browser
 - save projects with repo and launch defaults
+- edit saved projects from the browser
 - launch jobs from project pages
 - duplicate existing jobs
 - re-run jobs through a prefilled browser form
 - retry or cancel jobs from dashboard and detail views
+- review recent project launch history from project detail pages
 
 Saved projects capture lightweight defaults such as:
 
@@ -146,6 +150,25 @@ Saved projects capture lightweight defaults such as:
 - `default_base_branch`
 - `default_use_git_worktree`
 - `notes`
+
+Jobs launched from a saved project now persist `project_id` on the job record so project detail pages can show recent launches without depending on brittle metadata parsing.
+
+## Diagnostics and Doctor
+
+AI Telescreen now includes a browser-accessible doctor page at `/doctor` and a JSON view at `/api/doctor`.
+
+The doctor report summarizes:
+
+- config path, default backend, workspace root, and SQLite database path
+- backend-level config checks for enabled and disabled backends
+- lightweight environment checks such as `git` availability and Anthropic API env presence
+- current-workspace integration discovery status
+- the Codex smoke-test result when `codex_cli` is enabled
+
+The CLI exposes the same concepts through:
+
+- `claude-orchestrator doctor`
+- `claude-orchestrator smoke-test codex_cli`
 
 ## Stream Events
 
@@ -214,6 +237,7 @@ Provider support is added in [`claude_orchestrator/migrations/0002_add_provider_
 Stream event support is added in [`claude_orchestrator/migrations/0003_add_job_stream_events.sql`](claude_orchestrator/migrations/0003_add_job_stream_events.sql).
 Integration summary support is added in [`claude_orchestrator/migrations/0004_add_workspace_integrations.sql`](claude_orchestrator/migrations/0004_add_workspace_integrations.sql).
 Saved project support is added in [`claude_orchestrator/migrations/0005_add_saved_projects.sql`](claude_orchestrator/migrations/0005_add_saved_projects.sql).
+Job-to-project linkage support is added in [`claude_orchestrator/migrations/0006_add_job_project_id.sql`](claude_orchestrator/migrations/0006_add_job_project_id.sql).
 
 ## Installation
 
@@ -261,6 +285,7 @@ Key settings include:
 - `backends.claude_code_cli.allowed_hook_executables`
 - `backends.codex_cli.args`
 - `backends.codex_cli.timeout_seconds`
+- `backends.codex_cli.smoke_test_timeout_seconds`
 - `backends.codex_cli.auth_mode`
 - `backends.codex_cli.use_git_worktree`
 - `storage.sqlite_path`
@@ -276,6 +301,7 @@ enabled = true
 executable = "codex"
 args = []
 timeout_seconds = 1800
+smoke_test_timeout_seconds = 15
 auth_mode = "auto"
 use_git_worktree = true
 max_output_bytes = 1048576
@@ -310,6 +336,7 @@ Useful extras:
 ```bash
 claude-orchestrator run-daemon
 claude-orchestrator doctor
+claude-orchestrator smoke-test codex_cli
 claude-orchestrator migrate
 claude-orchestrator config-init
 ```
@@ -320,7 +347,9 @@ The dashboard is now the main cockpit for operator control. It shows:
 
 - state counts
 - prominent Create Job and Add Project entry points
+- a Doctor entry point for backend and environment diagnostics
 - saved projects with launch shortcuts
+- project editing and recent project launch history
 - a one-pass worker convenience control
 - recent jobs across Anthropic and OpenAI providers
 - provider/backend badges and workspace paths
@@ -334,6 +363,7 @@ The dashboard is now the main cockpit for operator control. It shows:
 - retry/cancel/duplicate actions from the browser
 - JSON status endpoints at `/api/status`, `/api/jobs`, and `/api/jobs/{job_id}`
 - JSON stream endpoint at `/api/jobs/{job_id}/stream-events`
+- JSON diagnostics endpoint at `/api/doctor`
 - simple provider/backend/status filtering
 
 To run it:
@@ -376,6 +406,7 @@ For subprocess-backed Codex jobs, cancellation also terminates the active child 
 ## Current Limitations
 
 - `codex_cli` remains a bounded subprocess backend in this pass rather than a full interactive session protocol.
+- The Codex smoke test is a short confidence check, not a guarantee that every downstream prompt, model choice, or network condition will behave the same way.
 - saved projects are intentionally lightweight; this pass does not add credentials, secret storage, or branch-management policy beyond existing local config and environment handling.
 - The current live activity model is polling-based and deliberately simple; it does not use websockets.
 - Workspace cleanup is intentionally conservative and defaults to `none`.
