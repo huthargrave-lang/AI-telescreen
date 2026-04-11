@@ -5,7 +5,8 @@
     <div>
       <a href="/projects">← Back to Projects</a>
       <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ project.name }}</h1>
-      <p class="subtitle">Saved launch defaults for <code>{{ project.repo_path }}</code></p>
+      <p class="subtitle">Saved launch defaults for this project template and launch point.</p>
+      <div class="value-block path" style="margin-top: 12px;" title="{{ project.repo_path }}">{{ project.repo_path }}</div>
     </div>
     <div class="toolbar">
       <a class="pill" href="/jobs/new?project_id={{ project.id }}">Create Job from Project</a>
@@ -18,33 +19,100 @@
     <section class="panel">
       <h2 style="margin-top:0;">Defaults</h2>
       <p class="meta">These defaults are reused when you launch a new task from this project.</p>
-      <p><strong>Repo path:</strong> {{ project.repo_path }}</p>
-      <p><strong>Backend:</strong> {{ project.default_backend or "default backend" }}</p>
-      <p><strong>Provider:</strong> {{ project.default_provider or "auto" }}</p>
-      <p><strong>Base branch:</strong> {{ project.default_base_branch or "n/a" }}</p>
-      <p><strong>Use git worktree:</strong> {{ project.default_use_git_worktree }}</p>
-      <p><strong>Notes:</strong> {{ project.notes or "n/a" }}</p>
+      <div class="summary-grid">
+        <div>
+          <div class="meta">Repo path</div>
+          <div class="value-block path" title="{{ project.repo_path }}">{{ project.repo_path }}</div>
+        </div>
+        <div>
+          <div class="meta">Compact defaults</div>
+          <div class="stack-compact tight">
+            <div class="pill-row">
+              {% for badge in project_display.defaults.badges %}
+                <span class="pill small" title="{{ badge.title }}">{{ badge.label }}</span>
+              {% endfor %}
+              {% if not project_display.defaults.badges %}
+                <span class="pill small">Uses app defaults</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="summary-grid two" style="margin-top: 12px;">
+        <div>
+          <div class="meta">Backend</div>
+          <div>{{ project.default_backend or "default backend" }}</div>
+        </div>
+        <div>
+          <div class="meta">Provider</div>
+          <div>{{ project.default_provider or "auto" }}</div>
+        </div>
+        <div>
+          <div class="meta">Base branch</div>
+          <div>{{ project.default_base_branch or "n/a" }}</div>
+        </div>
+        <div>
+          <div class="meta">Git worktree</div>
+          <div>{{ "Enabled" if project.default_use_git_worktree else "Disabled" }}</div>
+        </div>
+      </div>
+      <div style="margin-top: 12px;">
+        <div class="meta">Notes</div>
+        <div class="value-block">{{ project.notes or "No operator notes saved for this project." }}</div>
+      </div>
     </section>
 
     <section class="panel">
       <h2 style="margin-top:0;">Integrations</h2>
-      <p><strong>Status:</strong> {{ integration.status }}</p>
-      <p><strong>Labels:</strong> {{ integration.labels | join(", ") }}</p>
+      <div class="summary-grid">
+        <div>
+          <div class="meta">Status</div>
+          <div>{{ integration.status }}</div>
+        </div>
+        <div>
+          <div class="meta">Labels</div>
+          <div class="pill-row" style="margin-top: 6px;">
+            {% for label in integration.labels %}
+              <span class="pill small">{{ label }}</span>
+            {% else %}
+              <span class="meta">No integration labels</span>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
       {% if integration.summary.config_paths %}
-        <div class="meta-list">
+        <div class="meta-list" style="margin-top: 12px;">
           {% for config_path in integration.summary.config_paths %}
-            <div><strong>Config:</strong> {{ config_path }}</div>
+            <div>
+              <div class="meta">Config</div>
+              <div class="value-block path" title="{{ config_path }}">{{ config_path }}</div>
+            </div>
           {% endfor %}
         </div>
       {% endif %}
       {% if integration.summary.capabilities %}
         <div style="margin-top: 12px;">
           <strong>Capabilities</strong>
-          <ul>
-            {% for capability in integration.summary.capabilities %}
-              <li>{{ capability.name }} · {{ capability.source }} · {{ capability.kind }}</li>
-            {% endfor %}
-          </ul>
+          <div class="table-wrap">
+            <table class="data-table" style="margin-top: 8px; min-width: 520px;">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Source</th>
+                  <th>Kind</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for capability in integration.summary.capabilities %}
+                  <tr>
+                    <td>{{ capability.name }}</td>
+                    <td>{{ capability.source }}</td>
+                    <td>{{ capability.kind }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
         </div>
       {% else %}
         <p class="meta">No explicit project or user integration config was discovered for this repo.</p>
@@ -93,71 +161,88 @@
     <h2 style="margin-top:0;">Recent Launches</h2>
     <p class="meta">Recent jobs created from this project appear here so you can reopen them, retry them, cancel queued work, or clean up throwaway runs.</p>
     {% if jobs %}
-      <table>
-        <thead>
-          <tr>
-            <th>Job</th>
-            <th>Status</th>
-            <th>Backend</th>
-            <th>Provider</th>
-            <th>Attempts</th>
-            <th>Activity</th>
-            <th>Error</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for job in jobs %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
             <tr>
-              <td>
-                <a href="/jobs/{{ job.id }}"><code>{{ job.id }}</code></a>
-                <div class="meta">{{ job.lifecycle.headline }}</div>
-              </td>
-              <td><span class="status-{{ job.status }}">{{ job.status }}</span></td>
-              <td>{{ job.backend }}</td>
-              <td>{{ job.provider }}</td>
-              <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
-              <td>{{ job.latest_phase or job.latest_progress_message or job.last_activity_at }}</td>
-              <td>{{ job.last_error_message or "n/a" }}</td>
-              <td>
-                <div class="toolbar">
-                  <a class="pill" href="/jobs/{{ job.id }}">Open</a>
-                  {% if job.actions.run_now %}
-                    <form method="post" action="/jobs/{{ job.id }}/run-now?next=/projects/{{ project.id }}">
-                      <button type="submit">Run Now</button>
-                    </form>
-                  {% endif %}
-                  {% if job.actions.retry_now %}
-                    <form method="post" action="/jobs/{{ job.id }}/retry-now?next=/projects/{{ project.id }}">
-                      <button type="submit">Retry Now</button>
-                    </form>
-                  {% endif %}
-                  {% if job.actions.retry %}
-                    <form method="post" action="/jobs/{{ job.id }}/retry?next=/projects/{{ project.id }}">
-                      <button type="submit">Retry</button>
-                    </form>
-                  {% endif %}
-                  {% if job.actions.cancel %}
-                    <form method="post" action="/jobs/{{ job.id }}/cancel?next=/projects/{{ project.id }}">
-                      <button type="submit" class="secondary">Cancel</button>
-                    </form>
-                  {% endif %}
-                  {% if job.actions.duplicate %}
-                    <form method="post" action="/jobs/{{ job.id }}/duplicate?next=/projects/{{ project.id }}">
-                      <button type="submit" class="ghost">Duplicate</button>
-                    </form>
-                  {% endif %}
-                  {% if job.actions.delete %}
-                    <form method="post" action="/jobs/{{ job.id }}/delete?next=/projects/{{ project.id }}">
-                      <button type="submit" class="danger">Delete</button>
-                    </form>
-                  {% endif %}
-                </div>
-              </td>
+              <th>Job</th>
+              <th>Status</th>
+              <th>Backend</th>
+              <th>Provider</th>
+              <th>Attempts</th>
+              <th>Activity</th>
+              <th>Error</th>
+              <th>Actions</th>
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {% for job in jobs %}
+              <tr>
+                <td>
+                  <div class="stack-compact tight">
+                    <a href="/jobs/{{ job.id }}" title="{{ job.id }}"><span class="mono-inline">{{ job.short_id }}</span></a>
+                    <div class="meta truncate-2" title="{{ job.lifecycle.headline }}">{{ job.lifecycle.headline }}</div>
+                  </div>
+                </td>
+                <td><span class="pill small status-pill status-{{ job.status }}">{{ job.status }}</span></td>
+                <td><span class="pill small" title="{{ job.backend }}">{{ job.backend }}</span></td>
+                <td><span class="pill small" title="{{ job.provider }}">{{ job.provider }}</span></td>
+                <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
+                <td>
+                  <div class="stack-compact tight">
+                    <div>{{ job.latest_phase or "waiting" }}</div>
+                    <div class="meta truncate-2" title="{{ job.latest_progress_message or job.last_activity_at }}">
+                      {{ job.latest_progress_preview or job.last_activity_at }}
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  {% if job.last_error_message %}
+                    <div class="truncate-2" title="{{ job.last_error_message }}">{{ job.last_error_preview }}</div>
+                  {% else %}
+                    <div class="meta">No recent error</div>
+                  {% endif %}
+                </td>
+                <td class="cell-actions">
+                  <div class="toolbar compact">
+                    <a class="pill" href="/jobs/{{ job.id }}">Open</a>
+                    {% if job.actions.run_now %}
+                      <form method="post" action="/jobs/{{ job.id }}/run-now?next=/projects/{{ project.id }}">
+                        <button type="submit">Run Now</button>
+                      </form>
+                    {% endif %}
+                    {% if job.actions.retry_now %}
+                      <form method="post" action="/jobs/{{ job.id }}/retry-now?next=/projects/{{ project.id }}">
+                        <button type="submit">Retry Now</button>
+                      </form>
+                    {% endif %}
+                    {% if job.actions.retry %}
+                      <form method="post" action="/jobs/{{ job.id }}/retry?next=/projects/{{ project.id }}">
+                        <button type="submit">Retry</button>
+                      </form>
+                    {% endif %}
+                    {% if job.actions.cancel %}
+                      <form method="post" action="/jobs/{{ job.id }}/cancel?next=/projects/{{ project.id }}">
+                        <button type="submit" class="secondary">Cancel</button>
+                      </form>
+                    {% endif %}
+                    {% if job.actions.duplicate %}
+                      <form method="post" action="/jobs/{{ job.id }}/duplicate?next=/projects/{{ project.id }}">
+                        <button type="submit" class="ghost">Duplicate</button>
+                      </form>
+                    {% endif %}
+                    {% if job.actions.delete %}
+                      <form method="post" action="/jobs/{{ job.id }}/delete?next=/projects/{{ project.id }}">
+                        <button type="submit" class="danger">Delete</button>
+                      </form>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     {% else %}
       <p class="meta">No recent launches are associated with this project yet.</p>
     {% endif %}

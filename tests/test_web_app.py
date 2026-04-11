@@ -16,6 +16,12 @@ testclient = pytest.importorskip("fastapi.testclient")
 TestClient = testclient.TestClient
 
 
+def _short_id(value: str, *, prefix: int = 8, suffix: int = 4) -> str:
+    if len(value) <= prefix + suffix + 1:
+        return value
+    return f"{value[:prefix]}…{value[-suffix:]}"
+
+
 def test_web_app_loads_templates_outside_repo_root(tmp_path, monkeypatch):
     launch_dir = tmp_path / "launch"
     launch_dir.mkdir()
@@ -343,5 +349,70 @@ def test_web_project_edit_and_recent_launch_history(tmp_path):
     assert project.default_base_branch == "release"
     assert project.default_use_git_worktree is False
     assert "Recent Launches" in detail.text
-    assert launched_job_id in detail.text
+    assert _short_id(launched_job_id) in detail.text
+    assert f'title="{launched_job_id}"' in detail.text
     assert "Edit Project" in detail.text
+
+
+def test_web_tables_render_compact_ids_and_paths(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends=context.backends,
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    long_repo_path = tmp_path / "alpha" / "beta" / "gamma" / "delta" / "epsilon"
+    long_repo_path.mkdir(parents=True)
+    project_response = client.post(
+        "/projects",
+        data={
+            "name": "Deep Project",
+            "repo_path": str(long_repo_path),
+            "default_backend": "messages_api",
+            "default_provider": "anthropic",
+            "default_base_branch": "release",
+            "default_use_git_worktree": "on",
+            "notes": "Long path coverage",
+        },
+        follow_redirects=False,
+    )
+    assert project_response.status_code == 303
+
+    job = orchestrator.enqueue(
+        EnqueueJobRequest(
+            backend="messages_api",
+            task_type="code",
+            prompt="formatting coverage",
+            metadata={"repo_path": str(long_repo_path), "base_branch": "main"},
+        )
+    )
+    job = context.repository.get_job(job.id)
+
+    projects_page = client.get("/projects")
+    jobs_partial = client.get("/partials/jobs")
+    job_detail = client.get(f"/jobs/{job.id}")
+
+    expected_project_path = f"…/{'/'.join(long_repo_path.parts[-4:])}"
+
+    assert projects_page.status_code == 200
+    assert expected_project_path in projects_page.text
+    assert f'title="{long_repo_path}"' in projects_page.text
+    assert "messages_api" in projects_page.text
+    assert "anthropic" in projects_page.text
+    assert "base release" in projects_page.text
+    assert "worktree" in projects_page.text
+
+    assert jobs_partial.status_code == 200
+    assert _short_id(job.id) in jobs_partial.text
+    assert f'title="{job.id}"' in jobs_partial.text
+    assert job.workspace_path is not None
+    assert f'title="{job.workspace_path}"' in jobs_partial.text
+    assert "path-chip" in jobs_partial.text
+
+    assert job_detail.status_code == 200
+    assert job.id in job_detail.text
+    assert "Raw job metadata" in job_detail.text

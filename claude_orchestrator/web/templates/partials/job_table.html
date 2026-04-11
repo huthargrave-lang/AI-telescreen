@@ -1,104 +1,140 @@
-<table>
-  <thead>
-    <tr>
-      <th>Job</th>
-      <th>Provider</th>
-      <th>Backend</th>
-      <th>Status</th>
-      <th>Priority</th>
-      <th>Attempts</th>
-      <th>Workspace</th>
-      <th>Integration</th>
-      <th>Phase / Activity</th>
-      <th>Retry / Error</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for job in jobs %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
       <tr>
-        <td><a href="/jobs/{{ job.id }}"><code>{{ job.id }}</code></a></td>
-        <td><span class="pill">{{ job.provider }}</span></td>
-        <td><span class="pill">{{ job.backend }}</span></td>
-        <td>
-          <span class="status-{{ job.status }}">{{ job.status }}</span>
-          <div class="meta">{{ job.lifecycle.headline }}</div>
-        </td>
-        <td>{{ job.priority }}</td>
-        <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
-        <td>
-          <div>{{ job.workspace_kind or job.metadata.get("workspace_kind") or "directory" }}</div>
-          <div class="meta">{{ job.workspace_path or "workspace pending" }}</div>
-          {% if job.branch_name or job.metadata.get("branch_name") %}
-            <div class="meta">branch {{ job.branch_name or job.metadata.get("branch_name") }}</div>
-          {% endif %}
-        </td>
-        <td>
-          <div class="pill-row">
-            {% for label in job.integration.labels %}
-              <span class="pill">{{ label }}</span>
-            {% endfor %}
-          </div>
-          {% if job.integration.capability_names %}
-            <div class="meta">
-              {{ job.integration.capability_names | join(", ") }}
+        <th>Job</th>
+        <th>Provider</th>
+        <th>Backend</th>
+        <th>Status</th>
+        <th>Priority</th>
+        <th>Attempts</th>
+        <th>Workspace</th>
+        <th>Integration</th>
+        <th>Phase / Activity</th>
+        <th>Retry / Error</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+        <tr>
+          <td>
+            <div class="stack-compact tight">
+              <a href="/jobs/{{ job.id }}" title="{{ job.id }}">
+                <span class="mono-inline">{{ job.short_id }}</span>
+              </a>
+              <div class="meta truncate-2" title="{{ job.lifecycle.headline }}">{{ job.lifecycle.headline }}</div>
             </div>
-          {% endif %}
-        </td>
-        <td>
-          <div>{{ job.latest_phase or "n/a" }}</div>
-          <div class="meta">{{ job.latest_progress_message or job.last_activity_at }}</div>
-        </td>
-        <td>
-          {% if job.next_retry_at %}
-            <div class="meta">retry {{ job.next_retry_at }}</div>
-          {% endif %}
-          {% if job.last_error_message %}
-            <div>{{ job.last_error_message }}</div>
-          {% else %}
-            <div class="meta">n/a</div>
-          {% endif %}
-        </td>
-        <td>
-          <div class="toolbar">
-            <a class="pill" href="/jobs/{{ job.id }}">Open</a>
-            {% if job.actions.run_now %}
-              <form method="post" action="/jobs/{{ job.id }}/run-now?next=/">
-                <button type="submit">Run Now</button>
-              </form>
-            {% endif %}
-            {% if job.actions.retry_now %}
-              <form method="post" action="/jobs/{{ job.id }}/retry-now?next=/">
-                <button type="submit">Retry Now</button>
-              </form>
-            {% endif %}
-            {% if job.actions.retry %}
-              <form method="post" action="/jobs/{{ job.id }}/retry?next=/">
-                <button type="submit">Retry</button>
-              </form>
-            {% endif %}
-            {% if job.actions.cancel %}
-              <form method="post" action="/jobs/{{ job.id }}/cancel?next=/">
-                <button type="submit" class="secondary">Cancel</button>
-              </form>
-            {% endif %}
-            {% if job.actions.duplicate %}
-              <form method="post" action="/jobs/{{ job.id }}/duplicate?next=/">
-                <button type="submit" class="ghost">Duplicate</button>
-              </form>
-            {% endif %}
-            {% if job.actions.delete %}
-              <form method="post" action="/jobs/{{ job.id }}/delete?next=/">
-                <button type="submit" class="danger">Delete</button>
-              </form>
-            {% endif %}
-          </div>
-        </td>
-      </tr>
-    {% else %}
-      <tr>
-        <td colspan="11" class="meta">No jobs recorded yet. Create one from the browser or launch from a saved project.</td>
-      </tr>
-    {% endfor %}
-  </tbody>
-</table>
+          </td>
+          <td><span class="pill small" title="{{ job.provider }}">{{ job.provider }}</span></td>
+          <td><span class="pill small" title="{{ job.backend }}">{{ job.backend }}</span></td>
+          <td>
+            <div class="stack-compact tight">
+              <span class="pill small status-pill status-{{ job.status }}">{{ job.status }}</span>
+              <div class="meta truncate-2" title="{{ job.lifecycle.helper_text }}">{{ job.lifecycle.helper_text }}</div>
+            </div>
+          </td>
+          <td>{{ job.priority }}</td>
+          <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
+          <td>
+            <div class="stack-compact tight">
+              <div class="pill-row">
+                <span class="pill small" title="Workspace kind">{{ job.workspace.kind }}</span>
+                {% if job.base_branch %}
+                  <span class="pill small" title="Base branch">base {{ job.base_branch }}</span>
+                {% endif %}
+              </div>
+              <span class="path-chip" title="{{ job.workspace.path_full }}">{{ job.workspace.path_short }}</span>
+              {% if job.workspace.secondary %}
+                <div class="meta truncate-1" title="{{ job.workspace.secondary_title or job.workspace.secondary }}">
+                  {{ job.workspace.secondary }}
+                </div>
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            <div class="stack-compact tight">
+              <div class="pill-row">
+                {% for label in job.integration.labels %}
+                  <span class="pill small">{{ label }}</span>
+                {% endfor %}
+              </div>
+              {% if job.integration.capability_names %}
+                <div
+                  class="meta truncate-2"
+                  title="{{ job.integration.capability_names | join(', ') }}"
+                >
+                  {{ job.integration.capability_names | join(", ") }}
+                </div>
+              {% else %}
+                <div class="meta">No named capabilities</div>
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            <div class="stack-compact tight">
+              <div>{{ job.latest_phase or "waiting" }}</div>
+              <div
+                class="meta truncate-2"
+                title="{{ job.latest_progress_message or job.last_activity_at }}"
+              >
+                {{ job.latest_progress_preview or job.last_activity_at }}
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="stack-compact tight">
+              {% if job.next_retry_at %}
+                <div class="meta" title="{{ job.next_retry_at }}">retry {{ job.next_retry_at }}</div>
+              {% endif %}
+              {% if job.last_error_message %}
+                <div class="truncate-2" title="{{ job.last_error_message }}">{{ job.last_error_preview }}</div>
+              {% else %}
+                <div class="meta">No retry or error details</div>
+              {% endif %}
+            </div>
+          </td>
+          <td class="cell-actions">
+            <div class="toolbar compact">
+              <a class="pill" href="/jobs/{{ job.id }}">Open</a>
+              {% if job.actions.run_now %}
+                <form method="post" action="/jobs/{{ job.id }}/run-now?next=/">
+                  <button type="submit">Run Now</button>
+                </form>
+              {% endif %}
+              {% if job.actions.retry_now %}
+                <form method="post" action="/jobs/{{ job.id }}/retry-now?next=/">
+                  <button type="submit">Retry Now</button>
+                </form>
+              {% endif %}
+              {% if job.actions.retry %}
+                <form method="post" action="/jobs/{{ job.id }}/retry?next=/">
+                  <button type="submit">Retry</button>
+                </form>
+              {% endif %}
+              {% if job.actions.cancel %}
+                <form method="post" action="/jobs/{{ job.id }}/cancel?next=/">
+                  <button type="submit" class="secondary">Cancel</button>
+                </form>
+              {% endif %}
+              {% if job.actions.duplicate %}
+                <form method="post" action="/jobs/{{ job.id }}/duplicate?next=/">
+                  <button type="submit" class="ghost">Duplicate</button>
+                </form>
+              {% endif %}
+              {% if job.actions.delete %}
+                <form method="post" action="/jobs/{{ job.id }}/delete?next=/">
+                  <button type="submit" class="danger">Delete</button>
+                </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="11" class="meta">No jobs recorded yet. Create one from the browser or launch from a saved project.</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

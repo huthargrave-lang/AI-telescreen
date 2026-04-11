@@ -40,39 +40,51 @@
         </div>
       </div>
       {% if projects %}
-        <table style="margin-top: 12px;">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Repo</th>
-              <th>Defaults</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for project in projects %}
+        <div class="table-wrap" style="margin-top: 12px;">
+          <table class="data-table">
+            <thead>
               <tr>
-                <td><a href="/projects/{{ project.id }}">{{ project.name }}</a></td>
-                <td><code>{{ project.repo_path }}</code></td>
-                <td>
-                  <div>{{ project.default_backend or "default backend" }}</div>
-                  <div class="meta">
-                    {{ project.default_provider or "provider auto" }}
-                    {% if project.default_base_branch %} · base {{ project.default_base_branch }}{% endif %}
-                    {% if project.default_use_git_worktree %} · worktree{% endif %}
-                  </div>
-                </td>
-                <td>
-                  <div class="toolbar">
-                    <a class="pill" href="/jobs/new?project_id={{ project.id }}">Launch Job</a>
-                    <a class="pill" href="/projects/{{ project.id }}">Open</a>
-                    <a class="pill" href="/projects/{{ project.id }}/edit">Edit</a>
-                  </div>
-                </td>
+                <th>Name</th>
+                <th>Repo</th>
+                <th>Defaults</th>
+                <th>Actions</th>
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {% for project in projects %}
+                <tr>
+                  <td>
+                    <div class="stack-compact tight">
+                      <a href="/projects/{{ project.id }}" title="{{ project.name }}"><strong class="truncate-1">{{ project.name }}</strong></a>
+                    </div>
+                  </td>
+                  <td>
+                    <span class="path-chip" title="{{ project.repo_path }}">{{ project.repo_path_short }}</span>
+                  </td>
+                  <td>
+                    <div class="stack-compact tight">
+                      <div class="pill-row">
+                        {% for badge in project.defaults.badges %}
+                          <span class="pill small" title="{{ badge.title }}">{{ badge.label }}</span>
+                        {% endfor %}
+                      </div>
+                      {% if project.defaults.fallback %}
+                        <div class="meta">{{ project.defaults.fallback }}</div>
+                      {% endif %}
+                    </div>
+                  </td>
+                  <td class="cell-actions">
+                    <div class="toolbar compact">
+                      <a class="pill" href="/jobs/new?project_id={{ project.id }}">Launch Job</a>
+                      <a class="pill" href="/projects/{{ project.id }}">Open</a>
+                      <a class="pill" href="/projects/{{ project.id }}/edit">Edit</a>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       {% else %}
         <p class="meta" style="margin-top: 12px;">No saved projects yet. Add one to reuse repo, backend, branch, and workspace defaults when launching tasks.</p>
       {% endif %}

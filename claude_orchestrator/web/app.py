@@ -81,6 +81,83 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         latest_progress = next((event.message for event in reversed(events) if event.message), None)
         return latest, latest_phase, latest_progress
 
+    def _short_id(value: str, *, prefix: int = 8, suffix: int = 4) -> str:
+        if len(value) <= prefix + suffix + 1:
+            return value
+        return f"{value[:prefix]}…{value[-suffix:]}"
+
+    def _truncate_text(value: Optional[str], *, limit: int = 88) -> Optional[str]:
+        if not value:
+            return value
+        text = str(value).strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[: limit - 1].rstrip()}…"
+
+    def _short_path(value: Optional[str], *, keep_parts: int = 3, limit: int = 48) -> Optional[str]:
+        if not value:
+            return value
+        raw = str(value)
+        home = str(Path.home())
+        display = raw.replace(home, "~") if raw.startswith(home) else raw
+        parts = Path(display).parts
+        if len(parts) > keep_parts:
+            display = f"…/{'/'.join(parts[-keep_parts:])}"
+        if len(display) > limit:
+            display = f"{display[: limit - 1].rstrip()}…"
+        return display
+
+    def _workspace_summary(job) -> dict:
+        workspace_kind = job.metadata.get("workspace_kind") or "directory"
+        primary_path = job.workspace_path or job.metadata.get("workspace_path")
+        branch_name = job.metadata.get("branch_name")
+        worktree_path = job.metadata.get("worktree_path")
+        secondary = None
+        secondary_title = None
+        if branch_name:
+            secondary = f"branch {branch_name}"
+            secondary_title = secondary
+        elif worktree_path and worktree_path != primary_path:
+            secondary = _short_path(worktree_path, keep_parts=3, limit=42)
+            secondary_title = worktree_path
+        return {
+            "kind": workspace_kind,
+            "path_full": primary_path or "Workspace pending",
+            "path_short": _short_path(primary_path, keep_parts=3, limit=42) or "Workspace pending",
+            "secondary": secondary,
+            "secondary_title": secondary_title,
+        }
+
+    def _project_defaults_summary(project) -> dict:
+        badges = []
+        if project.default_backend:
+            badges.append({"label": project.default_backend, "title": "Default backend"})
+        if project.default_provider:
+            badges.append({"label": project.default_provider, "title": "Default provider"})
+        if project.default_base_branch:
+            badges.append({"label": f"base {project.default_base_branch}", "title": "Default base branch"})
+        if project.default_use_git_worktree:
+            badges.append({"label": "worktree", "title": "Uses git worktree by default"})
+        return {
+            "badges": badges,
+            "fallback": "Uses app defaults" if not badges else None,
+        }
+
+    def serialize_project(project) -> dict:
+        defaults = _project_defaults_summary(project)
+        return {
+            "id": project.id,
+            "name": project.name,
+            "repo_path": project.repo_path,
+            "repo_path_short": _short_path(project.repo_path, keep_parts=4, limit=54) or project.repo_path,
+            "defaults": defaults,
+            "default_backend": project.default_backend,
+            "default_provider": project.default_provider,
+            "default_base_branch": project.default_base_branch,
+            "default_use_git_worktree": project.default_use_git_worktree,
+            "notes": project.notes,
+        }
+
     def _job_detail_context(request: Request, job_id: str) -> dict:
         details = orchestrator.inspect(job_id)
         lifecycle = orchestrator.describe_job_lifecycle(details.job)
@@ -251,7 +328,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "request": request,
             "counts": counts,
             "jobs": [serialize_job(job) for job in jobs],
-            "projects": orchestrator.list_saved_projects(),
+            "projects": [serialize_project(project) for project in orchestrator.list_saved_projects()],
             "refresh_seconds": orchestrator.config.ui.refresh_seconds,
             "filters": {"status": status, "provider": provider, "backend": backend},
             "available_providers": _available_providers(),
@@ -267,8 +344,12 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         latest_stream_event, latest_phase, latest_progress = _stream_snapshot(job.id)
         integration_snapshot = job.metadata.get("integration_summary") or {}
         lifecycle = orchestrator.describe_job_lifecycle(job)
+        workspace = _workspace_summary(job)
+        error_preview = _truncate_text(job.last_error_message, limit=72)
+        latest_progress_preview = _truncate_text(latest_progress, limit=72)
         return {
             "id": job.id,
+            "short_id": _short_id(job.id),
             "status": job.status.value,
             "provider": job.provider,
             "backend": job.backend,
@@ -291,6 +372,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "lease_expires_at": job.lease_expires_at.isoformat() if job.lease_expires_at else None,
             "latest_phase": latest_phase,
             "latest_progress_message": latest_progress,
+            "latest_progress_preview": latest_progress_preview,
             "last_activity_at": latest_stream_event.timestamp.isoformat() if latest_stream_event else job.updated_at.isoformat(),
             "integration": {
                 "status": integration_snapshot.get("status", "not_scanned"),
@@ -299,12 +381,14 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "capability_count": integration_snapshot.get("capability_count", 0),
                 "config_paths": integration_snapshot.get("config_paths", []),
             },
+            "workspace": workspace,
             "metadata": job.metadata,
             "actions": orchestrator.describe_job_actions(job),
             "lifecycle": {
                 "headline": lifecycle.headline,
                 "helper_text": lifecycle.helper_text,
             },
+            "last_error_preview": error_preview,
         }
 
     def serialize_project_integration(summary) -> dict:
@@ -551,7 +635,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return templates.TemplateResponse(
             request=request,
             name="projects.html",
-            context={"request": request, "projects": orchestrator.list_saved_projects()},
+            context={"request": request, "projects": [serialize_project(project) for project in orchestrator.list_saved_projects()]},
         )
 
     @app.get("/projects/new", response_class=HTMLResponse)
@@ -671,6 +755,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             context={
                 "request": request,
                 "project": project,
+                "project_display": serialize_project(project),
                 "jobs": jobs,
                 "integration": serialize_project_integration(integration_summary),
             },

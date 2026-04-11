@@ -4,11 +4,12 @@
   <div class="header">
     <div>
       <a href="/">← Back</a>
-      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ job.id }}</h1>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ job_serialized.short_id }}</h1>
       <p class="subtitle">
         Provider {{ job.provider }} · backend {{ job.backend }} · task {{ job.task_type }} · attempts {{ job.attempt_count }}/{{ job.max_attempts }}
       </p>
       <p class="meta">{{ job_lifecycle.helper_text }}</p>
+      <div class="value-block path" style="margin-top: 12px;" title="{{ job.id }}">{{ job.id }}</div>
     </div>
     <div class="actions">
       {% if job_actions.run_now %}
@@ -60,10 +61,24 @@
 
     <section class="panel">
       <h2 style="margin-top:0;">Conversation State</h2>
-      <p><strong>System prompt:</strong> {{ state.system_prompt or "n/a" }}</p>
-      <p><strong>Compact summary:</strong> {{ state.compact_summary or "n/a" }}</p>
-      <p><strong>Checkpoint:</strong> {{ state.last_checkpoint_at.isoformat() if state.last_checkpoint_at else "n/a" }}</p>
-      <pre>{{ state.tool_context | tojson(indent=2) }}</pre>
+      <div class="summary-grid">
+        <div>
+          <div class="meta">System prompt</div>
+          <div class="value-block">{{ state.system_prompt or "No system prompt recorded." }}</div>
+        </div>
+        <div>
+          <div class="meta">Compact summary</div>
+          <div class="value-block">{{ state.compact_summary or "No compact summary recorded." }}</div>
+        </div>
+        <div>
+          <div class="meta">Checkpoint</div>
+          <div>{{ state.last_checkpoint_at.isoformat() if state.last_checkpoint_at else "n/a" }}</div>
+        </div>
+      </div>
+      <details style="margin-top: 12px;">
+        <summary>Tool context</summary>
+        <pre>{{ state.tool_context | tojson(indent=2) }}</pre>
+      </details>
     </section>
   </div>
 
@@ -80,11 +95,28 @@
     {% if runs %}
       {% for run in runs %}
         <article style="padding: 12px 0; border-top: 1px solid var(--border);">
-          <div class="meta">{{ run.started_at.isoformat() }} → {{ run.ended_at.isoformat() if run.ended_at else "running" }}</div>
-          <div><strong>Provider:</strong> {{ run.provider }}</div>
-          <div><strong>Backend:</strong> {{ run.backend }}</div>
-          <div><strong>Exit:</strong> {{ run.exit_reason or "n/a" }}</div>
-          <pre>{{ run.response_summary | tojson(indent=2) }}</pre>
+          <div class="summary-grid two">
+            <div>
+              <div class="meta">Timing</div>
+              <div>{{ run.started_at.isoformat() }} → {{ run.ended_at.isoformat() if run.ended_at else "running" }}</div>
+            </div>
+            <div>
+              <div class="meta">Provider</div>
+              <div>{{ run.provider }}</div>
+            </div>
+            <div>
+              <div class="meta">Backend</div>
+              <div>{{ run.backend }}</div>
+            </div>
+            <div>
+              <div class="meta">Exit</div>
+              <div>{{ run.exit_reason or "n/a" }}</div>
+            </div>
+          </div>
+          <details style="margin-top: 12px;">
+            <summary>Run summary</summary>
+            <pre>{{ run.response_summary | tojson(indent=2) }}</pre>
+          </details>
         </article>
       {% endfor %}
     {% else %}
@@ -95,24 +127,26 @@
   <section class="panel" style="margin-top:18px;">
     <h2 style="margin-top:0;">Events</h2>
     {% if events %}
-      <table>
-        <thead>
-          <tr>
-            <th>Timestamp</th>
-            <th>Type</th>
-            <th>Detail</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for event in events %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
             <tr>
-              <td>{{ event.timestamp.isoformat() }}</td>
-              <td>{{ event.event_type }}</td>
-              <td><code>{{ event.detail | tojson }}</code></td>
+              <th>Timestamp</th>
+              <th>Type</th>
+              <th>Detail</th>
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {% for event in events %}
+              <tr>
+                <td>{{ event.timestamp.isoformat() }}</td>
+                <td>{{ event.event_type }}</td>
+                <td><div class="value-block path"><code>{{ event.detail | tojson }}</code></div></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     {% else %}
       <p class="meta">No scheduler events recorded yet. Fresh queued jobs will usually show only minimal activity until they start running.</p>
     {% endif %}
@@ -121,26 +155,28 @@
   <section class="panel" style="margin-top:18px;">
     <h2 style="margin-top:0;">Artifacts</h2>
     {% if artifacts %}
-      <table>
-        <thead>
-          <tr>
-            <th>Created</th>
-            <th>Kind</th>
-            <th>Path</th>
-            <th>Metadata</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for artifact in artifacts %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
             <tr>
-              <td>{{ artifact.created_at.isoformat() }}</td>
-              <td>{{ artifact.kind }}</td>
-              <td><code>{{ artifact.path }}</code></td>
-              <td><code>{{ artifact.metadata | tojson }}</code></td>
+              <th>Created</th>
+              <th>Kind</th>
+              <th>Path</th>
+              <th>Metadata</th>
             </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {% for artifact in artifacts %}
+              <tr>
+                <td>{{ artifact.created_at.isoformat() }}</td>
+                <td>{{ artifact.kind }}</td>
+                <td><div class="value-block path" title="{{ artifact.path }}"><code>{{ artifact.path }}</code></div></td>
+                <td><div class="value-block path"><code>{{ artifact.metadata | tojson }}</code></div></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     {% else %}
       <p class="meta">No artifacts recorded yet.</p>
     {% endif %}

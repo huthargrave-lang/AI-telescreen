@@ -1,22 +1,50 @@
 <section class="panel">
   <h2 style="margin-top:0;">Integrations</h2>
-  <p><strong>Status:</strong> {{ integration.status }}</p>
-  <p><strong>Labels:</strong> {{ integration.labels | join(", ") }}</p>
-  <p>
-    <strong>Backend mode:</strong>
-    {{ integration.backend_support.effective_mode }}
-    (project_mcp={{ integration.backend_support.supports_project_mcp }}, user_mcp={{ integration.backend_support.supports_user_mcp }})
-  </p>
+  <div class="summary-grid two">
+    <div>
+      <div class="meta">Status</div>
+      <div>{{ integration.status }}</div>
+    </div>
+    <div>
+      <div class="meta">Labels</div>
+      <div class="pill-row" style="margin-top: 6px;">
+        {% for label in integration.labels %}
+          <span class="pill small">{{ label }}</span>
+        {% else %}
+          <span class="meta">No labels recorded</span>
+        {% endfor %}
+      </div>
+    </div>
+    <div>
+      <div class="meta">Backend mode</div>
+      <div>{{ integration.backend_support.effective_mode }}</div>
+    </div>
+    <div>
+      <div class="meta">Capability flags</div>
+      <div class="pill-row" style="margin-top: 6px;">
+        <span class="pill small">project_mcp={{ integration.backend_support.supports_project_mcp }}</span>
+        <span class="pill small">user_mcp={{ integration.backend_support.supports_user_mcp }}</span>
+      </div>
+    </div>
+  </div>
   {% if integration.status == "local-only" %}
     <p class="meta">No external project or user integrations were discovered for this task, so it is expected to behave as a local-only job.</p>
   {% endif %}
   {% if integration.summary %}
-    <p><strong>Workspace path:</strong> {{ integration.summary.workspace_path }}</p>
-    <p><strong>Repo path:</strong> {{ integration.summary.repo_path or "n/a" }}</p>
+    <div class="summary-grid" style="margin-top: 12px;">
+      <div>
+        <div class="meta">Workspace path</div>
+        <div class="value-block path" title="{{ integration.summary.workspace_path }}">{{ integration.summary.workspace_path }}</div>
+      </div>
+      <div>
+        <div class="meta">Repo path</div>
+        <div class="value-block path" title="{{ integration.summary.repo_path or 'n/a' }}">{{ integration.summary.repo_path or "n/a" }}</div>
+      </div>
+    </div>
     <div class="meta-list">
       <strong>Config paths</strong>
       {% for config_path in integration.summary.config_paths %}
-        <div class="meta">{{ config_path }}</div>
+        <div class="value-block path" title="{{ config_path }}">{{ config_path }}</div>
       {% else %}
         <div class="meta">No integration config files discovered.</div>
       {% endfor %}
@@ -24,26 +52,28 @@
     <div style="margin-top: 12px;">
       <strong>Capabilities</strong>
       {% if integration.summary.capabilities %}
-        <table style="margin-top: 8px;">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Source</th>
-              <th>Kind</th>
-              <th>Enabled</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for capability in integration.summary.capabilities %}
+        <div class="table-wrap">
+          <table class="data-table" style="margin-top: 8px; min-width: 540px;">
+            <thead>
               <tr>
-                <td>{{ capability.name }}</td>
-                <td>{{ capability.source }}</td>
-                <td>{{ capability.kind }}</td>
-                <td>{{ capability.enabled }}</td>
+                <th>Name</th>
+                <th>Source</th>
+                <th>Kind</th>
+                <th>Enabled</th>
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {% for capability in integration.summary.capabilities %}
+                <tr>
+                  <td>{{ capability.name }}</td>
+                  <td>{{ capability.source }}</td>
+                  <td>{{ capability.kind }}</td>
+                  <td>{{ capability.enabled }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       {% else %}
         <p class="meta">No project or user integration capabilities were discovered.</p>
       {% endif %}
