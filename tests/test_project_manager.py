@@ -44,8 +44,12 @@ def test_project_manager_state_is_created_for_saved_project(tmp_path):
 
     assert loaded is not None
     assert snapshot.state.current_phase == "planning"
+    assert snapshot.state.latest_response is not None
     assert snapshot.state.latest_recommendation is not None
     assert snapshot.state.latest_recommendation.decision == "wait_for_operator"
+    assert snapshot.state.latest_response.phase == "planning"
+    assert snapshot.state.latest_response.ui_layout_hint == "planning"
+    assert snapshot.state.display_snapshot["ui_layout_hint"] == "planning"
     assert loaded.stable_project_facts["repo_path"] == str(tmp_path.resolve())
 
 
@@ -70,10 +74,14 @@ def test_project_manager_ingests_completed_jobs_and_requests_manual_testing(tmp_
     snapshot = orchestrator.get_project_manager_snapshot(project.id)
 
     assert processed.status.value == "completed"
-    assert snapshot.state.current_phase == "awaiting_manual_test"
+    assert snapshot.state.current_phase == "polish"
     assert snapshot.state.needs_manual_testing is True
+    assert snapshot.state.latest_response is not None
     assert snapshot.state.latest_recommendation is not None
     assert snapshot.state.latest_recommendation.decision == "request_manual_test"
+    assert snapshot.state.latest_response.decision == "request_manual_test"
+    assert snapshot.state.latest_response.manual_test_checklist
+    assert snapshot.state.latest_response.ui_layout_hint == "polish"
     assert snapshot.recent_events[0].outcome_status == "completed"
     assert snapshot.recent_events[0].summary["manual_testing_needed"] is True
     assert repository.get_project_manager_state(project.id) is not None
@@ -103,9 +111,12 @@ def test_project_manager_ingests_failed_jobs_and_recommends_followup(tmp_path):
     snapshot = orchestrator.get_project_manager_snapshot(project.id)
 
     assert processed.status.value == "failed"
-    assert snapshot.state.current_phase == "blocked"
+    assert snapshot.state.current_phase == "debugging"
+    assert snapshot.state.latest_response is not None
     assert snapshot.state.latest_recommendation is not None
     assert snapshot.state.latest_recommendation.decision == "launch_followup_job"
+    assert snapshot.state.latest_response.draft_task is not None
+    assert snapshot.state.latest_response.ui_layout_hint == "debugging"
     assert "failed" in snapshot.state.summary.lower()
     assert snapshot.recent_events[0].summary["error_summary"] == "UI smoke test is still failing"
 
@@ -138,3 +149,4 @@ def test_project_manager_compacts_older_events(tmp_path):
     assert snapshot.state.last_compacted_at is not None
     assert snapshot.state.rolling_summary is not None
     assert "Older manager memory" in snapshot.state.rolling_summary
+    assert snapshot.state.display_snapshot["primary_sections"]

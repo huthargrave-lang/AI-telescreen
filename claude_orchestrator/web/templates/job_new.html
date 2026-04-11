@@ -26,6 +26,7 @@
     {% endif %}
     <form method="post" action="/jobs" class="form-grid">
       <input type="hidden" name="project_id" value="{{ form_values.project_id }}" />
+      <input type="hidden" name="execution_mode" value="{{ form_values.execution_mode }}" />
       <label class="full">
         <span class="meta">Prompt</span><br />
         <textarea name="prompt" required>{{ form_values.prompt }}</textarea>
@@ -80,6 +81,34 @@
         <div class="full meta">
           Using defaults from project <a href="/projects/{{ selected_project.id }}">{{ selected_project.name }}</a>.
           Repo path, backend, provider, branch, and workspace settings were prefilled from that project where available.
+        </div>
+      {% endif %}
+      {% if manager_context %}
+        <div class="full panel" style="margin: 0; padding: 14px;">
+          <div class="pill-row" style="margin-bottom: 8px;">
+            <span class="pill small">Project Manager {{ manager_context.mode }}</span>
+            {% if manager_context.execution_mode %}
+              <span class="pill small">{{ manager_context.execution_mode }}</span>
+            {% endif %}
+          </div>
+          <div class="meta">Why this draft exists</div>
+          <div class="value-block" style="margin-top: 8px;">{{ manager_context.reason }}</div>
+          {% if manager_context.rationale_bullets %}
+            <div class="meta" style="margin-top: 10px;">Draft rationale</div>
+            <ul style="margin-top: 8px;">
+              {% for item in manager_context.rationale_bullets %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+          {% if manager_context.questions %}
+            <div class="meta" style="margin-top: 10px;">Follow-up questions</div>
+            <ul style="margin-top: 8px;">
+              {% for item in manager_context.questions %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
         </div>
       {% endif %}
       <div class="full toolbar">

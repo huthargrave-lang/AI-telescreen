@@ -8,7 +8,7 @@ import pytest
 
 from claude_orchestrator.bootstrap import bootstrap
 from claude_orchestrator.diagnostics import BackendSmokeTestResult, DiagnosticCheck, DiagnosticsReport
-from claude_orchestrator.models import EnqueueJobRequest, JobStatus
+from claude_orchestrator.models import EnqueueJobRequest, JobStatus, RetryDecision, RetryDisposition
 from claude_orchestrator.services.orchestrator import OrchestratorService
 from claude_orchestrator.web.app import build_app
 from tests.helpers import CompletedBackend
@@ -60,6 +60,27 @@ class _FakeCodexProcess:
         self.stdout.feed_eof()
         self.stderr.feed_eof()
         self._done.set()
+
+
+class _FailingManagerBackend:
+    name = "messages_api"
+
+    async def submit(self, job, state, context):
+        raise RuntimeError("UI smoke test is still failing")
+
+    async def continue_job(self, job, state, context):
+        return await self.submit(job, state, context)
+
+    def classify_error(self, error, headers=None):
+        return RetryDecision(
+            disposition=RetryDisposition.FAIL,
+            reason="ui_regression_detected",
+            error_code="ui_regression_detected",
+            error_message=str(error),
+        )
+
+    def can_resume(self, job, state):
+        return False
 
 
 def _write_codex_test_config(config_path: Path, sqlite_name: str = "claude-orchestrator.db") -> None:
@@ -613,5 +634,49 @@ def test_project_detail_renders_project_manager_summary(tmp_path):
     assert "Project Manager" in detail.text
     assert "request_manual_test" in detail.text
     assert "manual testing needed" in detail.text
-    assert "Manual test checklist" in detail.text
+    assert "Manual Test Checklist" in detail.text
+    assert "Recent Changes" in detail.text
+    assert "Active Focus" in detail.text
     assert _short_id(job.id) in detail.text
+
+
+def test_project_manager_draft_prefills_new_job_form_and_launches(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": _FailingManagerBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Manager Drafts",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="manager draft project",
+    )
+    job = orchestrator.launch_job_from_project(
+        project.id,
+        prompt="Fix the broken browser regression.",
+        task_type="code",
+    )
+    asyncio.run(orchestrator.run_job_now(job.id, worker_id="worker-manager-draft"))
+
+    new_job = client.get(f"/jobs/new?project_id={project.id}&manager_draft=1")
+    launched = client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=False)
+    launched_job_id = Path(urlparse(launched.headers["location"]).path).name
+    launched_job = context.repository.get_job(launched_job_id)
+
+    assert new_job.status_code == 200
+    assert "Project Manager draft" in new_job.text
+    assert "UI smoke test is still failing" in new_job.text
+    assert "execution_mode" in new_job.text
+    assert launched.status_code == 303
+    assert launched_job.prompt != ""
+    assert launched_job.metadata["project_id"] == project.id
+    assert launched_job.metadata["execution_mode"] == "coding_pass"

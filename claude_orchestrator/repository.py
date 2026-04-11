@@ -20,6 +20,7 @@ from .models import (
     JobStatus,
     ProjectManagerEvent,
     ProjectManagerRecommendation,
+    ProjectManagerResponse,
     ProjectManagerSnapshot,
     ProjectManagerState,
     ProviderName,
@@ -430,6 +431,11 @@ class JobRepository:
             if state.latest_recommendation is not None
             else None
         )
+        latest_response_json = (
+            json.dumps(state.latest_response.to_dict(), sort_keys=True)
+            if state.latest_response is not None
+            else None
+        )
         with self.db.connect() as connection:
             connection.execute(
                 """
@@ -442,6 +448,8 @@ class JobRepository:
                     needs_manual_testing,
                     rolling_summary,
                     rolling_facts_json,
+                    latest_response_json,
+                    display_snapshot_json,
                     latest_recommendation_type,
                     latest_recommendation_reason,
                     latest_recommendation_json,
@@ -449,7 +457,7 @@ class JobRepository:
                     last_compacted_at,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(project_id) DO UPDATE SET
                     current_phase = excluded.current_phase,
                     summary = excluded.summary,
@@ -458,6 +466,8 @@ class JobRepository:
                     needs_manual_testing = excluded.needs_manual_testing,
                     rolling_summary = excluded.rolling_summary,
                     rolling_facts_json = excluded.rolling_facts_json,
+                    latest_response_json = excluded.latest_response_json,
+                    display_snapshot_json = excluded.display_snapshot_json,
                     latest_recommendation_type = excluded.latest_recommendation_type,
                     latest_recommendation_reason = excluded.latest_recommendation_reason,
                     latest_recommendation_json = excluded.latest_recommendation_json,
@@ -474,6 +484,8 @@ class JobRepository:
                     1 if state.needs_manual_testing else 0,
                     state.rolling_summary,
                     _dumps(state.rolling_facts),
+                    latest_response_json,
+                    _dumps(state.display_snapshot),
                     state.latest_recommendation_type,
                     state.latest_recommendation_reason,
                     latest_recommendation_json,
@@ -1467,6 +1479,12 @@ class JobRepository:
             needs_manual_testing=bool(row["needs_manual_testing"]),
             rolling_summary=row["rolling_summary"],
             rolling_facts=_loads(row["rolling_facts_json"]),
+            latest_response=ProjectManagerResponse.from_dict(
+                json.loads(row["latest_response_json"])
+                if row["latest_response_json"]
+                else None
+            ),
+            display_snapshot=_loads(row["display_snapshot_json"]),
             latest_recommendation=ProjectManagerRecommendation.from_dict(
                 json.loads(row["latest_recommendation_json"])
                 if row["latest_recommendation_json"]

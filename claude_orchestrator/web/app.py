@@ -160,6 +160,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
 
     def serialize_project_manager(snapshot) -> dict:
         recommendation = snapshot.state.latest_recommendation
+        response = snapshot.state.latest_response
         return {
             "state": {
                 "current_phase": snapshot.state.current_phase,
@@ -175,6 +176,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 if snapshot.state.last_compacted_at
                 else None,
             },
+            "response": response.to_dict() if response else None,
+            "display": dict(snapshot.state.display_snapshot),
             "recommendation": (
                 {
                     "decision": recommendation.decision,
@@ -243,6 +246,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "use_git_worktree": False,
             "base_branch": "",
             "project_id": "",
+            "execution_mode": "",
+            "_manager_context": None,
         }
 
     def _job_form_context(
@@ -268,6 +273,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "available_backends": _available_backends(),
             "available_providers": _available_providers(),
             "selected_project": selected_project,
+            "manager_context": values.get("_manager_context"),
             "error": error,
         }
 
@@ -346,6 +352,60 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "use_git_worktree": project.default_use_git_worktree,
                 "base_branch": project.default_base_branch or "",
                 "project_id": project.id,
+            }
+        )
+        return values
+
+    def _project_manager_followup_prompt(project, response: dict) -> str:
+        questions = response.get("followup_questions") or []
+        if not questions:
+            questions = [response.get("reason") or "What should happen next for this project?"]
+        lines = [f"Review the current AI Telescreen project context for {project.name} and answer these follow-up questions:"]
+        lines.extend(f"- {question}" for question in questions)
+        return "\n".join(lines)
+
+    def _job_form_values_from_project_manager(project_id: str, *, followup: bool = False) -> dict:
+        project = orchestrator.get_saved_project(project_id)
+        snapshot = orchestrator.get_project_manager_snapshot(project_id)
+        response = snapshot.state.latest_response
+        if response is None:
+            raise ValueError("This project does not have a saved Project Manager response yet.")
+        values = _job_form_values_from_project(project_id)
+        response_payload = response.to_dict()
+        if followup:
+            values.update(
+                {
+                    "prompt": _project_manager_followup_prompt(project, response_payload),
+                    "execution_mode": "read_only",
+                    "_manager_context": {
+                        "mode": "followup",
+                        "decision": response.decision,
+                        "reason": response.reason,
+                        "questions": response.followup_questions,
+                    },
+                }
+            )
+            return values
+        draft_task = response.draft_task
+        if draft_task is None:
+            raise ValueError("This project does not currently have a Project Manager draft task.")
+        values.update(
+            {
+                "prompt": draft_task.prompt,
+                "backend": draft_task.backend,
+                "provider": draft_task.provider or "",
+                "task_type": draft_task.task_type,
+                "priority": str(draft_task.priority),
+                "use_git_worktree": draft_task.use_git_worktree,
+                "base_branch": draft_task.base_branch or "",
+                "execution_mode": draft_task.execution_mode or "",
+                "_manager_context": {
+                    "mode": "draft",
+                    "decision": response.decision,
+                    "reason": response.reason,
+                    "execution_mode": draft_task.execution_mode,
+                    "rationale_bullets": draft_task.rationale_bullets,
+                },
             }
         )
         return values
@@ -490,12 +550,30 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return report.to_dict()
 
     @app.get("/jobs/new", response_class=HTMLResponse)
-    async def new_job(request: Request, project_id: Optional[str] = None, from_job: Optional[str] = None):
+    async def new_job(
+        request: Request,
+        project_id: Optional[str] = None,
+        from_job: Optional[str] = None,
+        manager_draft: Optional[bool] = None,
+        manager_followup: Optional[bool] = None,
+    ):
         form_values = _default_job_form_values()
-        if project_id:
-            form_values.update(_job_form_values_from_project(project_id))
-        if from_job:
-            form_values.update(_job_form_values_from_job(from_job))
+        try:
+            if project_id:
+                form_values.update(_job_form_values_from_project(project_id))
+                if manager_draft:
+                    form_values.update(_job_form_values_from_project_manager(project_id))
+                if manager_followup:
+                    form_values.update(_job_form_values_from_project_manager(project_id, followup=True))
+            if from_job:
+                form_values.update(_job_form_values_from_job(from_job))
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="job_new.html",
+                context=_job_form_context(request, form_values=form_values, error=str(exc)),
+                status_code=400,
+            )
         return templates.TemplateResponse(
             request=request,
             name="job_new.html",
@@ -516,6 +594,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "use_git_worktree": _coerce_checkbox(form.get("use_git_worktree")),
             "base_branch": str(form.get("base_branch") or ""),
             "project_id": str(form.get("project_id") or ""),
+            "execution_mode": str(form.get("execution_mode") or ""),
         }
         try:
             prompt = form_values["prompt"].strip()
@@ -525,6 +604,13 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             max_attempts = int(form_values["max_attempts"] or 5)
             provider = form_values["provider"] or None
             project_id = form_values["project_id"] or None
+            extra_metadata = {
+                key: value
+                for key, value in {
+                    "execution_mode": form_values["execution_mode"] or None,
+                }.items()
+                if value not in (None, "")
+            }
             if project_id:
                 job = orchestrator.launch_job_from_project(
                     project_id,
@@ -536,6 +622,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     provider=provider,
                     use_git_worktree=form_values["use_git_worktree"],
                     base_branch=form_values["base_branch"] or None,
+                    extra_metadata=extra_metadata,
                 )
             else:
                 metadata = {
@@ -544,6 +631,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                         "repo_path": form_values["repo_path"] or None,
                         "use_git_worktree": form_values["use_git_worktree"],
                         "base_branch": form_values["base_branch"] or None,
+                        "execution_mode": form_values["execution_mode"] or None,
                     }.items()
                     if value not in (None, "")
                 }
@@ -828,6 +916,18 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             max_attempts=int(str(form.get("max_attempts") or "5")),
         )
         return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+    @app.post("/projects/{project_id}/manager/launch-draft")
+    async def launch_project_manager_draft(request: Request, project_id: str):
+        try:
+            job = orchestrator.launch_job_from_project_manager_draft(project_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/projects/{project_id}", error=str(exc))
+        return _redirect_with_feedback(
+            request,
+            f"/jobs/{job.id}",
+            notice="Created a job from the latest Project Manager draft.",
+        )
 
     @app.post("/worker/run-once")
     async def worker_run_once(request: Request):

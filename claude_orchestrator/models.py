@@ -224,6 +224,132 @@ class ProjectManagerRecommendation:
             ],
         )
 
+    @classmethod
+    def from_response(cls, response: Optional["ProjectManagerResponse"]) -> Optional["ProjectManagerRecommendation"]:
+        if response is None:
+            return None
+        return cls(
+            decision=response.decision,
+            reason=response.reason,
+            next_task=response.draft_task.to_dict() if response.draft_task is not None else None,
+            manual_test_checklist=list(response.manual_test_checklist),
+        )
+
+
+@dataclass
+class ProjectManagerDraftTask:
+    prompt: str
+    backend: str
+    task_type: str
+    priority: int
+    use_git_worktree: bool
+    base_branch: Optional[str] = None
+    provider: Optional[str] = None
+    execution_mode: Optional[str] = None
+    rationale_bullets: List[str] = field(default_factory=list)
+    derived_from_operator_message: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "prompt": self.prompt,
+            "backend": self.backend,
+            "task_type": self.task_type,
+            "priority": self.priority,
+            "use_git_worktree": self.use_git_worktree,
+            "base_branch": self.base_branch,
+            "provider": self.provider,
+            "execution_mode": self.execution_mode,
+            "rationale_bullets": list(self.rationale_bullets),
+            "derived_from_operator_message": self.derived_from_operator_message,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Optional[Dict[str, Any]]) -> Optional["ProjectManagerDraftTask"]:
+        if not payload:
+            return None
+        return cls(
+            prompt=str(payload.get("prompt") or ""),
+            backend=str(payload.get("backend") or "messages_api"),
+            task_type=str(payload.get("task_type") or "code"),
+            priority=int(payload.get("priority") or 0),
+            use_git_worktree=bool(payload.get("use_git_worktree")),
+            base_branch=str(payload.get("base_branch")).strip() if payload.get("base_branch") not in (None, "") else None,
+            provider=str(payload.get("provider")).strip() if payload.get("provider") not in (None, "") else None,
+            execution_mode=(
+                str(payload.get("execution_mode")).strip()
+                if payload.get("execution_mode") not in (None, "")
+                else None
+            ),
+            rationale_bullets=[str(item) for item in (payload.get("rationale_bullets") or []) if str(item).strip()],
+            derived_from_operator_message=str(payload.get("derived_from_operator_message") or ""),
+        )
+
+
+@dataclass
+class ProjectManagerResponse:
+    phase: str
+    summary_bullets: List[str] = field(default_factory=list)
+    recent_change_bullets: List[str] = field(default_factory=list)
+    active_focus_bullets: List[str] = field(default_factory=list)
+    risks_or_blockers: List[str] = field(default_factory=list)
+    decision: str = "wait_for_operator"
+    reason: str = ""
+    draft_task: Optional[ProjectManagerDraftTask] = None
+    needs_manual_testing: bool = False
+    manual_test_checklist: List[str] = field(default_factory=list)
+    followup_questions: List[str] = field(default_factory=list)
+    ui_layout_hint: str = "planning"
+    confidence: str = "medium"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "phase": self.phase,
+            "summary_bullets": list(self.summary_bullets),
+            "recent_change_bullets": list(self.recent_change_bullets),
+            "active_focus_bullets": list(self.active_focus_bullets),
+            "risks_or_blockers": list(self.risks_or_blockers),
+            "decision": self.decision,
+            "reason": self.reason,
+            "draft_task": self.draft_task.to_dict() if self.draft_task is not None else None,
+            "needs_manual_testing": self.needs_manual_testing,
+            "manual_test_checklist": list(self.manual_test_checklist),
+            "followup_questions": list(self.followup_questions),
+            "ui_layout_hint": self.ui_layout_hint,
+            "confidence": self.confidence,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Optional[Dict[str, Any]]) -> Optional["ProjectManagerResponse"]:
+        if not payload:
+            return None
+        return cls(
+            phase=str(payload.get("phase") or "planning"),
+            summary_bullets=[str(item) for item in (payload.get("summary_bullets") or []) if str(item).strip()],
+            recent_change_bullets=[
+                str(item) for item in (payload.get("recent_change_bullets") or []) if str(item).strip()
+            ],
+            active_focus_bullets=[
+                str(item) for item in (payload.get("active_focus_bullets") or []) if str(item).strip()
+            ],
+            risks_or_blockers=[
+                str(item) for item in (payload.get("risks_or_blockers") or []) if str(item).strip()
+            ],
+            decision=str(payload.get("decision") or "wait_for_operator"),
+            reason=str(payload.get("reason") or ""),
+            draft_task=ProjectManagerDraftTask.from_dict(
+                payload.get("draft_task") if isinstance(payload.get("draft_task"), dict) else None
+            ),
+            needs_manual_testing=bool(payload.get("needs_manual_testing")),
+            manual_test_checklist=[
+                str(item) for item in (payload.get("manual_test_checklist") or []) if str(item).strip()
+            ],
+            followup_questions=[
+                str(item) for item in (payload.get("followup_questions") or []) if str(item).strip()
+            ],
+            ui_layout_hint=str(payload.get("ui_layout_hint") or "planning"),
+            confidence=str(payload.get("confidence") or "medium"),
+        )
+
 
 @dataclass
 class ProjectManagerEvent:
@@ -247,6 +373,8 @@ class ProjectManagerState:
     needs_manual_testing: bool = False
     rolling_summary: Optional[str] = None
     rolling_facts: Dict[str, Any] = field(default_factory=dict)
+    latest_response: Optional[ProjectManagerResponse] = None
+    display_snapshot: Dict[str, Any] = field(default_factory=dict)
     latest_recommendation: Optional[ProjectManagerRecommendation] = None
     latest_recommendation_type: Optional[str] = None
     latest_recommendation_reason: Optional[str] = None

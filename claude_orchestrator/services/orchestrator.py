@@ -359,6 +359,7 @@ class OrchestratorService:
         model: Optional[str] = None,
         use_git_worktree: Optional[bool] = None,
         base_branch: Optional[str] = None,
+        extra_metadata: Optional[Dict[str, Any]] = None,
     ) -> Job:
         project = self.repository.get_saved_project(project_id)
         metadata = self._sanitize_enqueue_metadata(
@@ -370,6 +371,7 @@ class OrchestratorService:
                     project.default_use_git_worktree if use_git_worktree is None else use_git_worktree
                 ),
                 "base_branch": base_branch or project.default_base_branch,
+                **(extra_metadata or {}),
             }
         )
         return self.enqueue(
@@ -552,6 +554,37 @@ class OrchestratorService:
     def compact_project_manager_state(self, project_id: str):
         self.repository.get_saved_project(project_id)
         return self.project_manager.compact_manager_state(project_id)
+
+    def launch_job_from_project_manager_draft(
+        self,
+        project_id: str,
+        *,
+        max_attempts: int = 5,
+    ) -> Job:
+        snapshot = self.get_project_manager_snapshot(project_id)
+        response = snapshot.state.latest_response
+        if response is None or response.draft_task is None:
+            raise ValueError("This project does not currently have a manager-generated task draft to launch.")
+        draft_task = response.draft_task
+        return self.launch_job_from_project(
+            project_id,
+            prompt=draft_task.prompt,
+            task_type=draft_task.task_type,
+            priority=draft_task.priority,
+            max_attempts=max_attempts,
+            backend=draft_task.backend,
+            provider=draft_task.provider,
+            use_git_worktree=draft_task.use_git_worktree,
+            base_branch=draft_task.base_branch,
+            extra_metadata=self._sanitize_enqueue_metadata(
+                {
+                    "execution_mode": draft_task.execution_mode,
+                    "project_manager_decision": response.decision,
+                    "project_manager_reason": response.reason,
+                    "project_manager_derived_from_operator_message": draft_task.derived_from_operator_message,
+                }
+            ),
+        )
 
     def run_backend_smoke_test(self, backend_name: str) -> BackendSmokeTestResult:
         if backend_name != "codex_cli":

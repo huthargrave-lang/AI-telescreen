@@ -51,12 +51,13 @@
 
 - Every saved project now has a compact durable project-manager state.
 - The manager ingests completed and failed project-linked jobs and keeps a rolling summary of what has happened.
-- It tracks current phase, manual-testing status, recent important outcomes, and the latest recommendation.
+- It tracks current phase, manual-testing status, recent important outcomes, and the latest structured manager response.
 - Recommendations are advisory in this pass. The manager does not auto-launch follow-up work.
 - Common recommendation types include `request_manual_test`, `launch_followup_job`, `wait_for_operator`, and `mark_complete`.
 - Manual-testing recommendations are especially likely after browser-facing or UI-heavy changes.
 - Older manager events are compacted into a rolling summary so memory stays bounded instead of growing around raw transcripts.
-- The project page is now the main place to review the manager summary, recommendation, and recent ingested outcomes.
+- The project page is now the main place to review dense manager bullet sections, recent ingested outcomes, and any draft follow-up task.
+- When the manager recommends `launch_followup_job`, the browser can prefill a task draft or launch that draft directly with operator approval.
 
 ## Browser Task Actions
 
@@ -72,9 +73,10 @@ These actions are intentionally state-aware. Invalid actions should be hidden in
 ## Reading Project Manager Recommendations
 
 - `request_manual_test` means AI Telescreen thinks a human should verify the recent change before another coding pass.
-- `launch_followup_job` means the manager sees a likely next coding step, but it leaves enqueueing that work to the operator.
+- `launch_followup_job` means the manager sees a likely next coding step and stores a structured draft task for the operator to launch or edit.
 - `wait_for_operator` means the project should pause for review, clarification, or an environment/config fix.
 - `mark_complete` means recent work looks stable enough that the current project phase may be done.
+- The structured response also includes bullet lists for summary, recent changes, active focus, blockers, manual-test steps, and follow-up questions so the browser can render the manager panel predictably.
 - The recommendation is guidance, not automation. You stay in control of whether a new job is launched.
 
 ## Diagnostics

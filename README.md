@@ -167,7 +167,7 @@ For each project, the manager keeps compact durable state such as:
 - a rolling summary of earlier outcomes
 - stable project facts from the saved project defaults
 - manual-testing status
-- the latest structured recommendation
+- the latest structured `ProjectManagerResponse`
 
 The manager ingests completed and failed jobs that were launched from a saved project and records compact structured outcomes instead of raw transcripts. It captures useful fields such as:
 
@@ -186,7 +186,23 @@ Recommendations are advisory only in this pass. The manager can recommend action
 - `mark_complete`
 - `needs_clarification`
 
-The manager does not auto-enqueue follow-up jobs yet. It surfaces the recommendation on the project page so operators can decide whether to launch the suggested next task.
+The manager now persists a full structured response with fields such as:
+
+- `phase`
+- `summary_bullets`
+- `recent_change_bullets`
+- `active_focus_bullets`
+- `risks_or_blockers`
+- `decision`
+- `reason`
+- `draft_task`
+- `needs_manual_testing`
+- `manual_test_checklist`
+- `followup_questions`
+- `ui_layout_hint`
+- `confidence`
+
+The project page renders those fields as dense cards and bullet sections instead of dumping raw JSON. When the manager recommends `launch_followup_job`, AI Telescreen also stores a compact display snapshot plus a structured draft task so the browser can offer operator-controlled `Launch Task`, `Edit Draft`, and `Ask Follow-up` actions without auto-enqueueing work behind the scenes.
 
 To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events per project and compacts older outcomes into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log.
 

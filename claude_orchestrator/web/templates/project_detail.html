@@ -161,31 +161,58 @@
     <div class="split">
       <div>
         <h2 style="margin-top:0;">Project Manager</h2>
-        <p class="meta">The project manager keeps compact memory for this saved project, ingests completed and failed jobs, and recommends the next operator step without launching anything automatically.</p>
+        <p class="meta">The project manager keeps compact memory for this saved project, ingests completed and failed jobs, and turns the latest recommendation into a structured browser-friendly plan.</p>
       </div>
       <div class="pill-row">
         <span class="pill small">phase {{ project_manager.state.current_phase }}</span>
+        {% if project_manager.response %}
+          <span class="pill small">{{ project_manager.response.decision }}</span>
+          <span class="pill small">{{ project_manager.response.confidence }}</span>
+        {% endif %}
         <span class="pill small">{{ project_manager.state.testing_status }}</span>
         {% if project_manager.state.needs_manual_testing %}
           <span class="pill small status-pill status-waiting_retry">manual testing needed</span>
         {% endif %}
       </div>
     </div>
+    {% if project_manager.response %}
+      <div class="summary-grid two" style="margin-top: 12px;">
+        <div>
+          <div class="meta">Decision</div>
+          <div class="value-block">
+            <strong>{{ project_manager.response.decision }}</strong><br />
+            {{ project_manager.response.reason }}
+          </div>
+        </div>
+        <div>
+          <div class="meta">Layout Hint</div>
+          <div class="value-block">
+            {{ project_manager.response.ui_layout_hint }} layout with {{ project_manager.response.confidence }} confidence.
+          </div>
+        </div>
+      </div>
+      {% if project_manager.response.decision == "launch_followup_job" and project_manager.response.draft_task %}
+        <div class="toolbar" style="margin-top: 12px;">
+          <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
+            <button type="submit">Launch Task</button>
+          </form>
+          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit Draft</a>
+          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_followup=1">Ask Follow-up</a>
+        </div>
+      {% elif project_manager.response.followup_questions %}
+        <div class="toolbar" style="margin-top: 12px;">
+          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_followup=1">Ask Follow-up</a>
+        </div>
+      {% endif %}
+    {% endif %}
     <div class="summary-grid two" style="margin-top: 12px;">
       <div>
         <div class="meta">Current summary</div>
         <div class="value-block">{{ project_manager.state.summary }}</div>
       </div>
       <div>
-        <div class="meta">Latest recommendation</div>
-        <div class="value-block">
-          {% if project_manager.recommendation %}
-            <strong>{{ project_manager.recommendation.decision }}</strong><br />
-            {{ project_manager.recommendation.reason }}
-          {% else %}
-            No recommendation recorded yet.
-          {% endif %}
-        </div>
+        <div class="meta">Display headline</div>
+        <div class="value-block">{{ project_manager.display.headline or "No manager headline recorded yet." }}</div>
       </div>
       <div>
         <div class="meta">Last ingested outcome</div>
@@ -202,30 +229,62 @@
         <div class="value-block">{{ project_manager.state.rolling_summary }}</div>
       </div>
     {% endif %}
-    {% if project_manager.recommendation and project_manager.recommendation.next_task %}
+        <div class="summary-grid two" style="margin-top: 12px;">
+          {% for section in project_manager.display.primary_sections %}
+            <div>
+              <div class="meta">{{ section["title"] }}</div>
+              <ul style="margin-top: 8px;">
+                {% for item in section["items"] %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endfor %}
+    </div>
+    {% if project_manager.display.secondary_sections %}
+      <div class="summary-grid two" style="margin-top: 4px;">
+        {% for section in project_manager.display.secondary_sections %}
+          <div>
+            <div class="meta">{{ section["title"] }}</div>
+            <ul style="margin-top: 8px;">
+              {% for item in section["items"] %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% if project_manager.response and project_manager.response.draft_task %}
       <div style="margin-top: 12px;">
-        <div class="meta">Recommended follow-up task</div>
+        <div class="meta">Draft task</div>
         <div class="summary-grid two">
           <div>
             <div class="meta">Backend</div>
-            <div>{{ project_manager.recommendation.next_task.backend }}</div>
+            <div>{{ project_manager.response.draft_task.backend }}</div>
           </div>
           <div>
             <div class="meta">Task type</div>
-            <div>{{ project_manager.recommendation.next_task.task_type }}</div>
+            <div>{{ project_manager.response.draft_task.task_type }}</div>
+          </div>
+          <div>
+            <div class="meta">Execution mode</div>
+            <div>{{ project_manager.response.draft_task.execution_mode or "n/a" }}</div>
+          </div>
+          <div>
+            <div class="meta">Base branch</div>
+            <div>{{ project_manager.response.draft_task.base_branch or "n/a" }}</div>
           </div>
         </div>
-        <div class="value-block" style="margin-top: 10px;">{{ project_manager.recommendation.next_task.prompt }}</div>
-      </div>
-    {% endif %}
-    {% if project_manager.recommendation and project_manager.recommendation.manual_test_checklist %}
-      <div style="margin-top: 12px;">
-        <div class="meta">Manual test checklist</div>
-        <ul>
-          {% for item in project_manager.recommendation.manual_test_checklist %}
-            <li>{{ item }}</li>
-          {% endfor %}
-        </ul>
+        <div class="value-block" style="margin-top: 10px;">{{ project_manager.response.draft_task.prompt }}</div>
+        {% if project_manager.response.draft_task.rationale_bullets %}
+          <div class="meta" style="margin-top: 10px;">Draft rationale</div>
+          <ul style="margin-top: 8px;">
+            {% for item in project_manager.response.draft_task.rationale_bullets %}
+              <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
       </div>
     {% endif %}
     <div style="margin-top: 12px;">
