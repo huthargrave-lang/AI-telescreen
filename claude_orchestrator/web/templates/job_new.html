@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}New Job · AI Telescreen{% endblock %}
+{% block body %}
+  <div class="header">
+    <div>
+      <a href="/">← Back</a>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">New Job</h1>
+      <p class="subtitle">Launch Codex or Claude work from the browser using the same orchestration service used by the CLI.</p>
+    </div>
+    <div class="toolbar">
+      <a class="pill" href="/projects">Projects</a>
+    </div>
+  </div>
+
+  <section class="panel">
+    {% if error %}
+      <p style="color: var(--danger); margin-top: 0;">{{ error }}</p>
+    {% endif %}
+    {% if projects %}
+      <div class="toolbar" style="margin-bottom: 16px;">
+        {% for project in projects %}
+          <a class="pill" href="/jobs/new?project_id={{ project.id }}">{{ project.name }}</a>
+        {% endfor %}
+      </div>
+    {% endif %}
+    <form method="post" action="/jobs" class="form-grid">
+      <input type="hidden" name="project_id" value="{{ form_values.project_id }}" />
+      <label class="full">
+        <span class="meta">Prompt</span><br />
+        <textarea name="prompt" required>{{ form_values.prompt }}</textarea>
+      </label>
+      <label>
+        <span class="meta">Backend</span><br />
+        <select name="backend">
+          {% for backend_name in available_backends %}
+            <option value="{{ backend_name }}" {% if form_values.backend == backend_name %}selected{% endif %}>{{ backend_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Provider</span><br />
+        <select name="provider">
+          <option value="">Auto</option>
+          {% for provider_name in available_providers %}
+            <option value="{{ provider_name }}" {% if form_values.provider == provider_name %}selected{% endif %}>{{ provider_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Task Type</span><br />
+        <input type="text" name="task_type" value="{{ form_values.task_type }}" />
+      </label>
+      <label>
+        <span class="meta">Priority</span><br />
+        <input type="number" name="priority" value="{{ form_values.priority }}" />
+      </label>
+      <label>
+        <span class="meta">Max Attempts</span><br />
+        <input type="number" name="max_attempts" min="1" value="{{ form_values.max_attempts }}" />
+      </label>
+      <label class="full">
+        <span class="meta">Repo Path</span><br />
+        <input type="text" name="repo_path" value="{{ form_values.repo_path }}" />
+      </label>
+      <label>
+        <span class="meta">Base Branch</span><br />
+        <input type="text" name="base_branch" value="{{ form_values.base_branch }}" />
+      </label>
+      <label>
+        <span class="meta">Workspace Mode</span><br />
+        <div style="margin-top: 10px;">
+          <label>
+            <input type="checkbox" name="use_git_worktree" {% if form_values.use_git_worktree %}checked{% endif %} />
+            use git worktree
+          </label>
+        </div>
+      </label>
+      {% if selected_project %}
+        <div class="full meta">Prefilled from project <a href="/projects/{{ selected_project.id }}">{{ selected_project.name }}</a>.</div>
+      {% endif %}
+      <div class="full toolbar">
+        <button type="submit">Create Job</button>
+        <a class="pill" href="/">Cancel</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

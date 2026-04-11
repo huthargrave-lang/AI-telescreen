@@ -11,6 +11,7 @@
   <p><strong>Branch:</strong> {{ job.metadata.get("branch_name") or "n/a" }}</p>
   <p><strong>Base branch:</strong> {{ job.metadata.get("base_branch") or "n/a" }}</p>
   <p><strong>Cleanup policy:</strong> {{ job.metadata.get("cleanup_policy") or "none" }}</p>
+  <p><strong>Integration status:</strong> {{ integration.status }}</p>
   <p><strong>Created:</strong> {{ job.created_at.isoformat() }}</p>
   <p><strong>Updated:</strong> {{ job.updated_at.isoformat() }}</p>
   <p><strong>Next retry:</strong> {{ job.next_retry_at.isoformat() if job.next_retry_at else "n/a" }}</p>

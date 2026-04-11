@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Projects · AI Telescreen{% endblock %}
+{% block body %}
+  <div class="header">
+    <div>
+      <a href="/">← Back</a>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">Projects</h1>
+      <p class="subtitle">Saved repositories act as launch targets with default backend, provider, branch, and worktree settings.</p>
+    </div>
+    <div class="toolbar">
+      <a class="pill" href="/projects/new">Add Project</a>
+      <a class="pill" href="/jobs/new">Create Job</a>
+    </div>
+  </div>
+  <section class="panel">
+    {% if projects %}
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Repo</th>
+            <th>Defaults</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for project in projects %}
+            <tr>
+              <td><a href="/projects/{{ project.id }}">{{ project.name }}</a></td>
+              <td><code>{{ project.repo_path }}</code></td>
+              <td>
+                <div>{{ project.default_backend or "default backend" }}</div>
+                <div class="meta">
+                  {{ project.default_provider or "provider auto" }}
+                  {% if project.default_base_branch %} · base {{ project.default_base_branch }}{% endif %}
+                  {% if project.default_use_git_worktree %} · worktree{% endif %}
+                </div>
+              </td>
+              <td>
+                <div class="toolbar">
+                  <a class="pill" href="/jobs/new?project_id={{ project.id }}">Launch Job</a>
+                  <a class="pill" href="/projects/{{ project.id }}">Open</a>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="meta">No projects saved yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

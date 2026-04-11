@@ -114,6 +114,7 @@ class ClaudeCodeCliBackendConfig:
 class CodexCliBackendConfig:
     enabled: bool = False
     executable: str = "codex"
+    args: List[str] = field(default_factory=list)
     command_template: List[str] = field(default_factory=list)
     timeout_seconds: int = 1800
     auth_mode: str = "auto"
@@ -281,7 +282,7 @@ preview_characters = 500
 [backends.codex_cli]
 enabled = false
 executable = "codex"
-command_template = ["codex", "run", "--workspace", "{workspace}", "--prompt-file", "{prompt_file}"]
+args = []
 timeout_seconds = 1800
 auth_mode = "auto"
 use_git_worktree = false

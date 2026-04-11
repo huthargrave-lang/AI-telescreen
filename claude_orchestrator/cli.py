@@ -47,8 +47,21 @@ def _load_metadata(raw: Optional[str]) -> dict:
     return json.loads(raw)
 
 
+def _integration_payload(details) -> dict:
+    summary = details.integration_summary
+    summary_payload = summary.to_dict() if summary is not None else None
+    status = summary.status() if summary is not None else "not_scanned"
+    labels = summary.status_labels() if summary is not None else ["not scanned"]
+    return {
+        "status": status,
+        "labels": labels,
+        "summary": summary_payload,
+        "backend_support": details.backend_integration_support,
+    }
+
+
 if typer is not None:  # pragma: no branch
-    app = typer.Typer(help="Durable local orchestration for provider-aware coding-agent workflows.")
+    app = typer.Typer(help="AI Telescreen: durable local orchestration for provider-aware coding-agent workflows.")
 
     @app.command("enqueue")
     def enqueue_command(
@@ -190,6 +203,7 @@ if typer is not None:  # pragma: no branch
             ],
             "latest_phase": details.latest_phase,
             "latest_progress_message": details.latest_progress_message,
+            "integration": _integration_payload(details),
             "artifacts": [
                 {
                     "created_at": artifact.created_at.isoformat(),
@@ -223,6 +237,29 @@ if typer is not None:  # pragma: no branch
         typer.echo(f"  lease_expiry: {job.lease_expires_at or 'n/a'}")
         typer.echo(f"  latest_phase: {details.latest_phase or 'n/a'}")
         typer.echo(f"  latest_progress: {details.latest_progress_message or 'n/a'}")
+        typer.echo(f"  integration_status: {_integration_payload(details)['status']}")
+        typer.echo(f"  integration_labels: {', '.join(_integration_payload(details)['labels'])}")
+        typer.echo(
+            "  backend_integrations: "
+            f"{details.backend_integration_support['effective_mode']} "
+            f"(project_mcp={details.backend_integration_support['supports_project_mcp']}, "
+            f"user_mcp={details.backend_integration_support['supports_user_mcp']})"
+        )
+        if details.integration_summary and details.integration_summary.config_paths:
+            typer.echo("  integration_config_paths:")
+            for config_path in details.integration_summary.config_paths:
+                typer.echo(f"    - {config_path}")
+        if details.integration_summary and details.integration_summary.capabilities:
+            typer.echo("  integration_capabilities:")
+            for capability in details.integration_summary.capabilities:
+                status_label = "enabled" if capability.enabled else "disabled"
+                typer.echo(
+                    f"    - {capability.name} [{capability.kind}] source={capability.source} status={status_label}"
+                )
+        if details.integration_summary and details.integration_summary.notes:
+            typer.echo("  integration_notes:")
+            for note in details.integration_summary.notes:
+                typer.echo(f"    - {note}")
         typer.echo(f"  compact_summary: {details.state.compact_summary or 'n/a'}")
         typer.echo(f"  tool_context: {json.dumps(details.state.tool_context)}")
         if details.runs:

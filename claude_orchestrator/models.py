@@ -178,3 +178,17 @@ class BatchPollResult:
     failed_custom_ids: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     still_pending_custom_ids: List[str] = field(default_factory=list)
     headers: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class SavedProject:
+    id: str
+    name: str
+    repo_path: str
+    default_backend: Optional[str]
+    default_provider: Optional[str]
+    default_base_branch: Optional[str]
+    default_use_git_worktree: bool
+    notes: Optional[str]
+    created_at: datetime
+    updated_at: datetime

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Project {{ project.name }} · AI Telescreen{% endblock %}
+{% block body %}
+  <div class="header">
+    <div>
+      <a href="/projects">← Back to Projects</a>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ project.name }}</h1>
+      <p class="subtitle">{{ project.repo_path }}</p>
+    </div>
+    <div class="toolbar">
+      <a class="pill" href="/jobs/new?project_id={{ project.id }}">Customize Launch</a>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+    <section class="panel">
+      <h2 style="margin-top:0;">Defaults</h2>
+      <p><strong>Backend:</strong> {{ project.default_backend or "default backend" }}</p>
+      <p><strong>Provider:</strong> {{ project.default_provider or "auto" }}</p>
+      <p><strong>Base branch:</strong> {{ project.default_base_branch or "n/a" }}</p>
+      <p><strong>Use git worktree:</strong> {{ project.default_use_git_worktree }}</p>
+      <p><strong>Notes:</strong> {{ project.notes or "n/a" }}</p>
+    </section>
+
+    <section class="panel">
+      <h2 style="margin-top:0;">Launch Job</h2>
+      <form method="post" action="/projects/{{ project.id }}/launch" class="form-grid">
+        <label class="full">
+          <span class="meta">Prompt</span><br />
+          <textarea name="prompt" required></textarea>
+        </label>
+        <label>
+          <span class="meta">Task Type</span><br />
+          <input type="text" name="task_type" value="code" />
+        </label>
+        <label>
+          <span class="meta">Priority</span><br />
+          <input type="number" name="priority" value="0" />
+        </label>
+        <label>
+          <span class="meta">Max Attempts</span><br />
+          <input type="number" name="max_attempts" value="5" min="1" />
+        </label>
+        <div class="full toolbar">
+          <button type="submit">Launch Job</button>
+          <a class="pill" href="/jobs/new?project_id={{ project.id }}">Open Full Job Form</a>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top: 18px;">
+    <h2 style="margin-top:0;">Recent Jobs</h2>
+    {% if jobs %}
+      <table>
+        <thead>
+          <tr>
+            <th>Job</th>
+            <th>Status</th>
+            <th>Backend</th>
+            <th>Activity</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in jobs %}
+            <tr>
+              <td><a href="/jobs/{{ job.id }}"><code>{{ job.id }}</code></a></td>
+              <td>{{ job.status.value }}</td>
+              <td>{{ job.backend }}</td>
+              <td>{{ job.metadata.get("workspace_kind") or "directory" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="meta">No jobs launched from this project yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

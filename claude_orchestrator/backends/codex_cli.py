@@ -20,6 +20,10 @@ class CodexCliBackend(BackendAdapter):
 
     name = "codex_cli"
     SHELL_EXECUTABLES = {"bash", "sh", "zsh", "fish", "pwsh", "powershell"}
+    MANAGED_ARGUMENTS = {"--workspace", "--prompt-file", "--cd", "-C"}
+    supports_workspace_integrations = False
+    supports_project_mcp = False
+    supports_user_mcp = False
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
@@ -29,9 +33,7 @@ class CodexCliBackend(BackendAdapter):
         workspace_result = prepare_job_workspace(context.workspace_root, job.id, job.metadata)
         workspace = workspace_result.workspace_path
         prompt = resolve_job_prompt(job)
-        prompt_file = workspace / "codex_prompt.txt"
-        prompt_file.write_text(prompt, encoding="utf-8")
-        command = self._build_command(workspace=workspace, prompt_file=prompt_file)
+        command = self._build_command(workspace=workspace, prompt=prompt)
         returncode, stdout_text, stderr_text, stdout_truncated, stderr_truncated, latest_phase = await self._run_subprocess(
             command,
             cwd=workspace,
@@ -79,8 +81,8 @@ class CodexCliBackend(BackendAdapter):
                 )
             ],
             request_payload={
-                "command": command,
-                "prompt_file": str(prompt_file),
+                "command": self._safe_command_metadata(command),
+                "prompt_delivery": "argv" if not self._uses_legacy_command_template() else "legacy_command_template",
                 "workspace": str(workspace),
                 "provider": job.provider,
                 "backend": job.backend,
@@ -111,26 +113,35 @@ class CodexCliBackend(BackendAdapter):
     def can_resume(self, job: Job, state: ConversationState) -> bool:
         return False
 
-    def _build_command(self, *, workspace: Path, prompt_file: Path) -> List[str]:
+    def _uses_legacy_command_template(self) -> bool:
+        return bool(self.config.backends.codex_cli.command_template)
+
+    def _build_command(self, *, workspace: Path, prompt: str) -> List[str]:
         backend_config = self.config.backends.codex_cli
         if not backend_config.enabled:
             raise ConfigurationError("codex_cli backend is disabled in config.")
-        if not backend_config.command_template:
-            raise ConfigurationError("codex_cli.command_template is empty.")
 
         executable = backend_config.executable
         resolved = shutil.which(executable)
         if resolved is None:
             raise ConfigurationError(f"Codex executable not found on PATH: {executable}")
+        if Path(resolved).name in self.SHELL_EXECUTABLES:
+            raise ConfigurationError("Shell wrappers are not allowed for codex_cli command execution.")
 
+        if self._uses_legacy_command_template():
+            prompt_file = workspace / "codex_prompt.txt"
+            prompt_file.write_text(prompt, encoding="utf-8")
+            return self._build_legacy_command(resolved=resolved, workspace=workspace, prompt_file=prompt_file)
+        return self._build_direct_command(resolved=resolved, prompt=prompt)
+
+    def _build_legacy_command(self, *, resolved: str, workspace: Path, prompt_file: Path) -> List[str]:
+        backend_config = self.config.backends.codex_cli
         first_token = backend_config.command_template[0]
         allowed_first_tokens = {backend_config.executable, "{executable}", resolved, Path(resolved).name}
         if first_token not in allowed_first_tokens:
             raise ConfigurationError(
                 "codex_cli.command_template must begin with the configured executable or {executable}."
             )
-        if Path(resolved).name in self.SHELL_EXECUTABLES:
-            raise ConfigurationError("Shell wrappers are not allowed for codex_cli command execution.")
 
         command: List[str] = []
         for item in backend_config.command_template:
@@ -143,6 +154,15 @@ class CodexCliBackend(BackendAdapter):
             )
         command[0] = resolved
         return command
+
+    def _build_direct_command(self, *, resolved: str, prompt: str) -> List[str]:
+        backend_config = self.config.backends.codex_cli
+        if any(item in self.MANAGED_ARGUMENTS for item in backend_config.args):
+            raise ConfigurationError(
+                "codex_cli.args must not include workspace or prompt file flags; workspace is provided via subprocess cwd."
+            )
+        base_args = list(backend_config.args) or ["exec"]
+        return [resolved, *base_args, prompt]
 
     def _raise_for_failure(self, *, stderr_text: str, stdout_text: str) -> None:
         lowered = f"{stderr_text}\n{stdout_text}".lower()
@@ -185,7 +205,7 @@ class CodexCliBackend(BackendAdapter):
             event_type="process_started",
             phase=None,
             message="Codex CLI process started.",
-            metadata={"command": command, "cwd": str(cwd), "pid": process.pid},
+            metadata={"command": self._safe_command_metadata(command), "cwd": str(cwd), "pid": process.pid},
         )
 
         async def pump_stream(stream: Optional[asyncio.StreamReader], source: str) -> None:
@@ -306,3 +326,16 @@ class CodexCliBackend(BackendAdapter):
         if emit_stream_event is None:
             return
         emit_stream_event(event_type, phase, message, metadata)
+
+    def _safe_command_metadata(self, command: List[str]) -> Dict[str, object]:
+        if self._uses_legacy_command_template():
+            return {
+                "argv": command,
+                "mode": "legacy_command_template",
+            }
+        return {
+            "executable": command[0],
+            "args": command[1:-1],
+            "prompt_in_argv": True,
+            "mode": "direct_prompt",
+        }

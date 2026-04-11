@@ -81,8 +81,6 @@ def validate_backend_config(config: AppConfig) -> None:
 
     if config.backends.codex_cli.enabled:
         executable = config.backends.codex_cli.executable
-        if not config.backends.codex_cli.command_template:
-            errors.append("codex_cli is enabled but command_template is empty.")
         if shutil.which(executable) is None:
             errors.append(f"codex_cli executable {executable!r} is not on PATH.")
         if config.backends.codex_cli.timeout_seconds <= 0:

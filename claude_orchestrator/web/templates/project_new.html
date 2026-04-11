@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Add Project · AI Telescreen{% endblock %}
+{% block body %}
+  <div class="header">
+    <div>
+      <a href="/">← Back</a>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">Add Project</h1>
+      <p class="subtitle">Register a repository once, then launch jobs with browser-friendly defaults.</p>
+    </div>
+  </div>
+
+  <section class="panel">
+    {% if error %}
+      <p style="color: var(--danger); margin-top: 0;">{{ error }}</p>
+    {% endif %}
+    <form method="post" action="/projects" class="form-grid">
+      <label>
+        <span class="meta">Name</span><br />
+        <input type="text" name="name" value="{{ form_values.name }}" required />
+      </label>
+      <label class="full">
+        <span class="meta">Repo Path</span><br />
+        <input type="text" name="repo_path" value="{{ form_values.repo_path }}" required />
+      </label>
+      <label>
+        <span class="meta">Default Backend</span><br />
+        <select name="default_backend">
+          {% for backend_name in available_backends %}
+            <option value="{{ backend_name }}" {% if form_values.default_backend == backend_name %}selected{% endif %}>{{ backend_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Default Provider</span><br />
+        <select name="default_provider">
+          <option value="">Auto</option>
+          {% for provider_name in available_providers %}
+            <option value="{{ provider_name }}" {% if form_values.default_provider == provider_name %}selected{% endif %}>{{ provider_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Default Base Branch</span><br />
+        <input type="text" name="default_base_branch" value="{{ form_values.default_base_branch }}" />
+      </label>
+      <label>
+        <span class="meta">Workspace Mode</span><br />
+        <div style="margin-top: 10px;">
+          <label>
+            <input type="checkbox" name="default_use_git_worktree" {% if form_values.default_use_git_worktree %}checked{% endif %} />
+            use git worktree by default
+          </label>
+        </div>
+      </label>
+      <label class="full">
+        <span class="meta">Notes</span><br />
+        <textarea name="notes">{{ form_values.notes }}</textarea>
+      </label>
+      <div class="full toolbar">
+        <button type="submit">Save Project</button>
+        <a class="pill" href="/projects">Cancel</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

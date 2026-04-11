@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..config import AppConfig
+from ..integrations import (
+    WorkspaceIntegrationSummary,
+    build_integration_metadata_summary,
+    discover_workspace_integrations,
+)
 from ..models import (
     ArtifactRecord,
     BackendResult,
@@ -21,12 +26,13 @@ from ..models import (
     JobStreamEvent,
     JobStatus,
     RetryDisposition,
+    SavedProject,
 )
 from ..providers import infer_provider, validate_provider_backend
 from ..repository import JobRepository
 from ..retry import RetryPolicy, RetryableBackendError, UserCancelledError
 from ..timeutils import utcnow
-from ..workspaces import cleanup_job_workspace, prepare_job_workspace, store_private_prompt, store_response_artifact
+from ..workspaces import cleanup_job_workspace, prepare_job_workspace, resolve_job_prompt, store_private_prompt, store_response_artifact
 from ..backends.base import BackendAdapter, BatchCapableBackend, BackendContext
 
 logger = logging.getLogger(__name__)
@@ -43,6 +49,8 @@ class JobInspection:
     latest_phase: Optional[str]
     latest_progress_message: Optional[str]
     artifacts: List[ArtifactRecord]
+    integration_summary: Optional[WorkspaceIntegrationSummary]
+    backend_integration_support: Dict[str, Any]
 
 
 class LeaseHeartbeat:
@@ -182,6 +190,11 @@ class OrchestratorService:
                 if value is not None
             }
         )
+        integration_summary = self._discover_integration_summary(
+            workspace_result.workspace_path,
+            workspace_result.repo_path,
+        )
+        metadata["integration_summary"] = build_integration_metadata_summary(integration_summary)
         request.metadata = metadata
         created = self.repository.create_job(
             request,
@@ -189,6 +202,7 @@ class OrchestratorService:
             workspace_path=workspace_result.workspace_path,
             job_id=job_id,
         )
+        self._persist_integration_summary(created.id, integration_summary)
         actual_workspace = workspace_result.workspace_path
         if privacy_mode:
             metadata = dict(created.metadata)
@@ -240,12 +254,107 @@ class OrchestratorService:
             continuation_priority_bonus=self.config.worker.continuation_priority_bonus,
         )
 
+    def list_saved_projects(self) -> List[SavedProject]:
+        return self.repository.list_saved_projects()
+
+    def get_saved_project(self, project_id: str) -> SavedProject:
+        return self.repository.get_saved_project(project_id)
+
+    def create_saved_project(
+        self,
+        *,
+        name: str,
+        repo_path: str,
+        default_backend: Optional[str] = None,
+        default_provider: Optional[str] = None,
+        default_base_branch: Optional[str] = None,
+        default_use_git_worktree: bool = False,
+        notes: Optional[str] = None,
+    ) -> SavedProject:
+        resolved_repo_path = Path(repo_path).expanduser().resolve()
+        if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
+            raise ValueError(f"Repository path does not exist or is not a directory: {resolved_repo_path}")
+        return self.repository.create_saved_project(
+            name=name,
+            repo_path=str(resolved_repo_path),
+            default_backend=default_backend,
+            default_provider=default_provider,
+            default_base_branch=default_base_branch,
+            default_use_git_worktree=default_use_git_worktree,
+            notes=notes,
+        )
+
+    def launch_job_from_project(
+        self,
+        project_id: str,
+        *,
+        prompt: str,
+        task_type: str = "code",
+        priority: int = 0,
+        max_attempts: int = 5,
+        backend: Optional[str] = None,
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+        use_git_worktree: Optional[bool] = None,
+        base_branch: Optional[str] = None,
+    ) -> Job:
+        project = self.repository.get_saved_project(project_id)
+        metadata = self._sanitize_enqueue_metadata(
+            {
+                "project_id": project.id,
+                "project_name": project.name,
+                "repo_path": project.repo_path,
+                "use_git_worktree": (
+                    project.default_use_git_worktree if use_git_worktree is None else use_git_worktree
+                ),
+                "base_branch": base_branch or project.default_base_branch,
+            }
+        )
+        return self.enqueue(
+            EnqueueJobRequest(
+                backend=backend or project.default_backend or self.config.default_backend,
+                provider=provider or project.default_provider,
+                task_type=task_type,
+                prompt=prompt,
+                priority=priority,
+                metadata=metadata,
+                max_attempts=max_attempts,
+                model=model,
+            )
+        )
+
+    def duplicate_job(
+        self,
+        job_id: str,
+        *,
+        prompt: Optional[str] = None,
+    ) -> Job:
+        original = self.repository.get_job(job_id)
+        source_prompt = prompt if prompt is not None else resolve_job_prompt(original)
+        metadata = self._sanitize_enqueue_metadata(dict(original.metadata))
+        return self.enqueue(
+            EnqueueJobRequest(
+                backend=original.backend,
+                provider=original.provider,
+                task_type=original.task_type,
+                prompt=source_prompt,
+                priority=original.priority,
+                metadata=metadata,
+                max_attempts=original.max_attempts,
+                system_prompt=self.repository.get_conversation_state(job_id).system_prompt,
+                model=original.model,
+                privacy_mode=bool(original.metadata.get("prompt_artifact_path")),
+            )
+        )
+
     def inspect(self, job_id: str) -> JobInspection:
+        job = self.repository.get_job(job_id)
+        integration_summary = self.repository.get_workspace_integration_summary_for_job(job_id)
         stream_events = self.repository.get_stream_events(job_id, limit=200)
         latest_stream_event = self.repository.get_latest_stream_event(job_id)
         latest_phase, latest_progress_message = self._summarize_stream_activity(stream_events)
         return JobInspection(
-            job=self.repository.get_job(job_id),
+            job=job,
             state=self.repository.get_conversation_state(job_id),
             runs=self.repository.get_job_runs(job_id),
             events=self.repository.get_scheduler_events(job_id),
@@ -254,6 +363,11 @@ class OrchestratorService:
             latest_phase=latest_phase,
             latest_progress_message=latest_progress_message,
             artifacts=self.repository.get_artifacts(job_id),
+            integration_summary=integration_summary,
+            backend_integration_support=self.describe_backend_integrations(
+                job.backend,
+                integration_summary=integration_summary,
+            ),
         )
 
     def retry_due(self) -> int:
@@ -337,11 +451,13 @@ class OrchestratorService:
 
     async def process_claimed_job(self, job: Job, worker_id: str) -> Job:
         backend = self._get_backend(job.backend)
+        job, integration_summary = self._refresh_job_integration_summary(job)
         state = self.repository.get_conversation_state(job.id)
         context = BackendContext(
             config=self.config,
             workspace_root=self.config.workspace_path(self.root),
             worker_id=worker_id,
+            integration_summary=integration_summary,
             emit_stream_event=lambda event_type, phase, message, metadata: self._emit_stream_event(
                 job,
                 event_type=event_type,
@@ -621,6 +737,31 @@ class OrchestratorService:
                     processed += 1
         return processed
 
+    def describe_backend_integrations(
+        self,
+        backend_name: str,
+        *,
+        integration_summary: Optional[WorkspaceIntegrationSummary] = None,
+    ) -> Dict[str, Any]:
+        backend = self.backends.get(backend_name)
+        supports_workspace_integrations = bool(getattr(backend, "supports_workspace_integrations", False))
+        supports_project_mcp = bool(getattr(backend, "supports_project_mcp", False))
+        supports_user_mcp = bool(getattr(backend, "supports_user_mcp", False))
+        if not supports_workspace_integrations:
+            effective_mode = "local-only backend"
+        elif integration_summary is None:
+            effective_mode = "integration-capable"
+        elif integration_summary.external_capabilities():
+            effective_mode = "integration-aware"
+        else:
+            effective_mode = "integration-capable, no configured external integrations discovered"
+        return {
+            "supports_workspace_integrations": supports_workspace_integrations,
+            "supports_project_mcp": supports_project_mcp,
+            "supports_user_mcp": supports_user_mcp,
+            "effective_mode": effective_mode,
+        }
+
     def _persist_success(
         self,
         job: Job,
@@ -828,6 +969,85 @@ class OrchestratorService:
         if backend_name in {"messages_api", "message_batches", "agent_sdk"}:
             return self.config.backends.messages_api.model or self.config.model
         return None
+
+    def _sanitize_enqueue_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        sanitized = dict(metadata)
+        for key in (
+            "workspace_path",
+            "worktree_path",
+            "workspace_kind",
+            "workspace_app_created",
+            "branch_name",
+            "prompt_artifact_path",
+            "integration_summary",
+            "followup_type",
+            "followup_reason",
+            "followup_requested_at",
+            "resume_hint",
+            "batch_record_id",
+            "upstream_batch_id",
+            "batch_custom_id",
+        ):
+            sanitized.pop(key, None)
+        return {
+            key: value
+            for key, value in sanitized.items()
+            if value not in (None, "")
+        }
+
+    def _discover_integration_summary(
+        self,
+        workspace_path: Path,
+        repo_path: Optional[Path],
+    ) -> WorkspaceIntegrationSummary:
+        return discover_workspace_integrations(
+            workspace_path,
+            repo_path=repo_path,
+        )
+
+    def _refresh_job_integration_summary(
+        self,
+        job: Job,
+    ) -> tuple[Job, Optional[WorkspaceIntegrationSummary]]:
+        workspace_path_value = job.workspace_path or job.metadata.get("workspace_path")
+        if not workspace_path_value:
+            return job, None
+        repo_path_value = job.metadata.get("repo_path")
+        repo_path = Path(str(repo_path_value)).expanduser() if repo_path_value else None
+        integration_summary = self._discover_integration_summary(
+            Path(str(workspace_path_value)).expanduser(),
+            repo_path,
+        )
+        integration_snapshot = build_integration_metadata_summary(integration_summary)
+        if job.metadata.get("integration_summary") != integration_snapshot:
+            updated_metadata = dict(job.metadata)
+            updated_metadata["integration_summary"] = integration_snapshot
+            self.repository.set_job_metadata(job.id, updated_metadata)
+            job = self.repository.get_job(job.id)
+        self._persist_integration_summary(job.id, integration_summary)
+        return job, integration_summary
+
+    def _persist_integration_summary(
+        self,
+        job_id: str,
+        integration_summary: WorkspaceIntegrationSummary,
+    ) -> None:
+        saved = self.repository.save_workspace_integration_summary(integration_summary, job_id=job_id)
+        if not saved:
+            return
+        self.repository.add_scheduler_event(
+            job_id,
+            "workspace_integrations_discovered",
+            {
+                "status": integration_summary.status(),
+                "labels": integration_summary.status_labels(),
+                "config_paths": integration_summary.config_paths,
+                "capability_names": [
+                    capability.name
+                    for capability in integration_summary.external_capabilities()
+                ],
+            },
+        )
 
     def _emit_stream_event(
         self,

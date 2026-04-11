@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional, Protocol, Sequence, Tuple, runtime_checkable
 
 from ..config import AppConfig
+from ..integrations import WorkspaceIntegrationSummary
 from ..models import BackendResult, BatchPollResult, BatchSubmissionResult, ConversationState, Job, RetryDecision
 
 
@@ -15,6 +16,7 @@ class BackendContext:
     config: AppConfig
     workspace_root: Path
     worker_id: str
+    integration_summary: Optional[WorkspaceIntegrationSummary] = None
     emit_stream_event: Optional[Callable[[str, Optional[str], str, Dict[str, object]], None]] = None
 
 

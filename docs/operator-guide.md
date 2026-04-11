@@ -1,12 +1,12 @@
-# Operator Guide
+# AI Telescreen Operator Guide
 
 ## Daily Flow
 
 1. Initialize config with `claude-orchestrator config-init`.
 2. Export `ANTHROPIC_API_KEY`.
-3. Enqueue work with `claude-orchestrator enqueue --prompt-file task.txt` or `claude-orchestrator enqueue --backend codex_cli --prompt-file task.txt`.
+3. Open the AI Telescreen dashboard and create or launch a job from the browser.
 4. Start a worker with `claude-orchestrator run-worker`.
-5. Open the dashboard with the FastAPI app to inspect retries, errors, artifacts, provider, backend, workspace details, and live coding-agent activity.
+5. Use the browser for job monitoring, retry, cancel, duplication, saved-project launch, and optional one-pass worker cycles.
 
 ## Provider and Backend
 
@@ -22,12 +22,39 @@
 - Enable worktree mode per job with metadata such as `repo_path`, `use_git_worktree`, and `base_branch`.
 - Cleanup is metadata-driven via `cleanup_policy` and defaults to `none`.
 - Automatic cleanup only targets app-created workspaces and skips dirty worktrees to avoid destroying user-visible changes.
+- `codex_cli` now relies on subprocess `cwd` for workspace context instead of passing a `--workspace` flag.
+- The preferred Codex invocation shape is `codex exec PROMPT`, with static extra args configured in `backends.codex_cli.args` when needed.
+
+## Browser-First Operations
+
+- The dashboard is now the primary operator surface.
+- Use `Create Job` to launch ad hoc work without touching the terminal.
+- Use saved projects to prefill repo, backend, provider, base branch, and worktree defaults.
+- Job detail pages support retry, cancel, duplicate, and re-run/edit flows.
+- The browser also exposes a lightweight `Process Due Jobs Once` control for ad hoc worker passes.
+- Continuous background processing still works best with `claude-orchestrator run-worker`.
+
+## Saved Projects
+
+- Saved projects are first-class launch targets stored in SQLite.
+- A project captures `name`, `repo_path`, default backend/provider, default base branch, default worktree preference, and notes.
+- Launching from a project preserves those defaults while still using the same orchestration service path as CLI-created jobs.
+
+## Integration Awareness
+
+- AI Telescreen records whether a job is local-only or has discovered project or user integration configuration.
+- The discovery pass looks for `.claude/settings.json` and `.mcp.json` in the workspace or repo context, plus optional user-scoped config such as `~/.claude/settings.json` and `~/.mcp.json`.
+- Discovery is metadata-only in this pass: it summarizes configured capabilities, config paths, and parser notes, but it does not implement arbitrary hosted-app inheritance or a full MCP runtime.
+- `claude_code_cli` is the primary integration-aware backend today; `codex_cli` remains effectively local-only in this pass.
+- Hosted consumer-app integrations are not automatically inherited. Claude-side integrations require explicit project or user configuration on the machine running the job.
 
 ## Live Activity
 
 - `codex_cli` jobs emit durable stream events while running.
+- `claude_code_cli` jobs emit an integration-context event when discovered workspace integrations are threaded into backend execution.
 - Recent progress is visible in `inspect JOB_ID`, `/api/jobs/{job_id}/stream-events`, and the job detail page.
 - Common event types include `process_started`, `stdout_line`, `stderr_line`, `phase_changed`, `process_completed`, and `process_interrupted`.
+- Codex job request metadata now records direct prompt delivery rather than relying on prompt-file or workspace CLI flags in the preferred path.
 
 ## Recovery Playbook
 
@@ -42,6 +69,8 @@
 
 - Why is the job paused?
   Look at `inspect JOB_ID`, `inspect JOB_ID --json`, or the most recent `scheduler_events` entry.
+- Is this job local-only or integration-enabled?
+  Look at the integration section in `inspect JOB_ID`, the job detail page, or `/api/jobs/{job_id}`.
 - When will it retry?
   Check `next_retry_at` in `inspect JOB_ID` or the dashboard.
 - What upstream signal caused the retry?

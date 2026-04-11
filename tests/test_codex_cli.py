@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -107,8 +106,8 @@ def _job() -> Job:
 def _context(tmp_path, *, emit_stream_event=None):
     config = AppConfig()
     config.backends.codex_cli.enabled = True
-    config.backends.codex_cli.executable = Path(sys.executable).name
-    config.backends.codex_cli.command_template = ["{executable}", "{prompt_file}"]
+    config.backends.codex_cli.executable = "codex"
+    config.backends.codex_cli.args = []
     return config, SimpleNamespace(
         config=config,
         workspace_root=tmp_path / "workspaces",
@@ -124,8 +123,8 @@ def _build_codex_orchestrator(tmp_path: Path) -> tuple[OrchestratorService, JobR
     config.workspace_root = str(tmp_path / "workspaces")
     config.privacy.store_response_artifacts = True
     config.backends.codex_cli.enabled = True
-    config.backends.codex_cli.executable = Path(sys.executable).name
-    config.backends.codex_cli.command_template = ["{executable}", "{prompt_file}"]
+    config.backends.codex_cli.executable = "codex"
+    config.backends.codex_cli.args = []
     db = Database(Path(config.storage.sqlite_path))
     db.initialize()
     repository = JobRepository(db)
@@ -139,8 +138,9 @@ def _build_codex_orchestrator(tmp_path: Path) -> tuple[OrchestratorService, JobR
     return orchestrator, repository, config
 
 
-def test_codex_cli_backend_success(monkeypatch, tmp_path):
+def test_codex_cli_backend_uses_exec_with_direct_prompt_invocation(monkeypatch, tmp_path):
     emitted_events: list[tuple[str, str | None, str]] = []
+    captured: dict[str, object] = {}
     config, context = _context(
         tmp_path,
         emit_stream_event=lambda event_type, phase, message, metadata: emitted_events.append(
@@ -148,8 +148,11 @@ def test_codex_cli_backend_success(monkeypatch, tmp_path):
         ),
     )
     backend = CodexCliBackend(config)
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
 
     async def fake_exec(*args, **kwargs):
+        captured["args"] = list(args)
+        captured["cwd"] = kwargs.get("cwd")
         return FakeProcess(returncode=0, stdout_chunks=[b"planning step\n", b"done\n"], stderr_chunks=[b"warning\n"])
 
     monkeypatch.setattr("claude_orchestrator.backends.codex_cli.asyncio.create_subprocess_exec", fake_exec)
@@ -160,6 +163,11 @@ def test_codex_cli_backend_success(monkeypatch, tmp_path):
     assert result.output == "planning step\ndone"
     assert result.artifacts[0].kind == "codex_cli_output"
     assert result.request_payload["provider"] == ProviderName.OPENAI.value
+    assert result.request_payload["prompt_delivery"] == "argv"
+    assert captured["args"] == ["/usr/bin/codex", "exec", "hello"]
+    assert "--workspace" not in captured["args"]
+    assert "--prompt-file" not in captured["args"]
+    assert captured["cwd"] == str((tmp_path / "workspaces" / "codex-job").resolve())
     assert any(event_type == "process_started" for event_type, _, _ in emitted_events)
     assert any(event_type == "stdout_line" for event_type, _, _ in emitted_events)
     assert any(event_type == "process_completed" for event_type, _, _ in emitted_events)
@@ -168,6 +176,7 @@ def test_codex_cli_backend_success(monkeypatch, tmp_path):
 def test_codex_cli_backend_auth_failure(monkeypatch, tmp_path):
     config, context = _context(tmp_path)
     backend = CodexCliBackend(config)
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
 
     async def fake_exec(*args, **kwargs):
         return FakeProcess(returncode=1, stderr_chunks=[b"authentication failed: api key invalid\n"])
@@ -181,6 +190,7 @@ def test_codex_cli_backend_auth_failure(monkeypatch, tmp_path):
 def test_codex_cli_backend_transient_failure(monkeypatch, tmp_path):
     config, context = _context(tmp_path)
     backend = CodexCliBackend(config)
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
 
     async def fake_exec(*args, **kwargs):
         return FakeProcess(returncode=1, stderr_chunks=[b"temporarily unavailable, try again later\n"])
@@ -200,6 +210,21 @@ def test_codex_cli_backend_classifies_retryable_error(tmp_path):
     assert decision.disposition == RetryDisposition.RETRY
 
 
+def test_codex_cli_backend_timeout(monkeypatch, tmp_path):
+    config, context = _context(tmp_path)
+    config.backends.codex_cli.timeout_seconds = 0.01
+    backend = CodexCliBackend(config)
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess(wait_forever=True)
+
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.asyncio.create_subprocess_exec", fake_exec)
+
+    with pytest.raises(RetryableBackendError):
+        asyncio.run(backend.submit(_job(), ConversationState(job_id="codex-job", system_prompt=None), context))
+
+
 def test_codex_cli_stream_events_are_persisted(monkeypatch, tmp_path):
     orchestrator, repository, config = _build_codex_orchestrator(tmp_path)
     config.worker.lease_seconds = 0.1
@@ -213,6 +238,7 @@ def test_codex_cli_stream_events_are_persisted(monkeypatch, tmp_path):
     )
     claimed = repository.claim_job(job.id, "worker-1", lease_seconds=config.effective_lease_seconds())
     assert claimed is not None
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
 
     async def fake_exec(*args, **kwargs):
         return FakeProcess(
@@ -256,6 +282,7 @@ def test_worker_shutdown_interrupts_active_codex_job(monkeypatch, tmp_path):
         )
     )
     process_holder: dict[str, FakeProcess] = {}
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
 
     async def fake_exec(*args, **kwargs):
         process = FakeProcess(

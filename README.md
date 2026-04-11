@@ -1,6 +1,6 @@
-# claude-orchestrator
+# AI Telescreen
 
-`claude-orchestrator` is a local-first orchestration layer for durable coding-agent workflows. It queues work, executes it through supported provider interfaces, persists all state locally in SQLite, and treats rate limits and upstream availability as normal operational states instead of edge cases.
+AI Telescreen is a local-first orchestration layer for durable coding-agent workflows. The current Python package and CLI command still use legacy internal names such as `claude_orchestrator` and `claude-orchestrator`, but the product surface is now AI Telescreen. It queues work, executes it through supported provider interfaces, persists all state locally in SQLite, and treats rate limits and upstream availability as normal operational states instead of edge cases.
 
 This project is intentionally compliance-bounded:
 
@@ -58,7 +58,16 @@ Optional wrapper for explicitly configured documented CLI flows. It does not ass
 
 ### `codex_cli` (`provider=openai`)
 
-Optional wrapper for explicitly configured Codex CLI flows. It is intentionally bounded: configurable executable and command template, timeout handling, capped stdout/stderr capture, retry classification for transient CLI failures, durable incremental stream events, and no browser automation or consumer-site state.
+Optional wrapper for explicitly configured Codex CLI flows. It is intentionally bounded: configurable executable and static args, cwd-based workspace execution, direct prompt delivery from Python, timeout handling, capped stdout/stderr capture, retry classification for transient CLI failures, durable incremental stream events, and no browser automation or consumer-site state.
+
+The preferred Codex path is now:
+
+- prepare the workspace or worktree in Python
+- launch Codex inside that directory via subprocess `cwd`
+- pass the prompt directly as the final CLI argument
+- avoid `--workspace` entirely
+
+On this machine, the installed Codex CLI exposes `codex exec [PROMPT]`, so AI Telescreen defaults to that non-interactive form when `backends.codex_cli.args` is empty. Legacy `command_template` config is still accepted for backward compatibility, but it is no longer the recommended style.
 
 ## Workspaces and Worktrees
 
@@ -94,6 +103,50 @@ Cleanup remains conservative by default:
 
 The original repository working tree is never deleted. For git worktrees, cleanup is skipped if the worktree contains user-visible changes.
 
+## Integration Awareness
+
+AI Telescreen now distinguishes between local-only jobs and workspaces with Claude-side integration configuration.
+
+For each job workspace, AI Telescreen can discover and summarize:
+
+- project-scoped Claude settings in `.claude/settings.json`
+- project-scoped MCP definitions in `.mcp.json`
+- optional user-scoped Claude settings in `~/.claude/settings.json`
+- optional user-scoped MCP definitions in `~/.mcp.json`
+
+The discovery pass is intentionally conservative:
+
+- it parses configuration defensively and records notes for malformed files instead of failing the job
+- it summarizes configured capabilities and config paths without attempting a full MCP runtime implementation
+- it does not inherit integrations from hosted consumer apps or scrape any hosted product UI
+
+Each job records a durable integration summary so operators can answer:
+
+- whether the job is local-only or integration-enabled
+- which project or user config files were discovered
+- which MCP or external tool capabilities appear to be configured
+- whether the selected backend is integration-aware or effectively local-only
+
+## Saved Projects and Browser Launch
+
+AI Telescreen is now web-first for normal operator control:
+
+- create jobs from the browser
+- save projects with repo and launch defaults
+- launch jobs from project pages
+- duplicate existing jobs
+- re-run jobs through a prefilled browser form
+- retry or cancel jobs from dashboard and detail views
+
+Saved projects capture lightweight defaults such as:
+
+- `repo_path`
+- `default_backend`
+- `default_provider`
+- `default_base_branch`
+- `default_use_git_worktree`
+- `notes`
+
 ## Stream Events
 
 Long-running coding jobs now emit durable execution stream events into a dedicated SQLite table:
@@ -113,6 +166,8 @@ These are exposed in:
 - `/api/jobs/{job_id}`
 - `/api/jobs/{job_id}/stream-events`
 - the job detail page's live activity panel
+
+Claude Code CLI jobs also emit an `integration_context_loaded` stream event when workspace integrations are discovered and passed into the backend context.
 
 ## Job State Model
 
@@ -151,10 +206,14 @@ SQLite tables:
 - `scheduler_events`
 - `job_stream_events`
 - `message_batches`
+- `workspace_integrations`
+- `saved_projects`
 
-Migrations live in [`claude_orchestrator/migrations/0001_initial.sql`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/migrations/0001_initial.sql).
-Provider support is added in [`claude_orchestrator/migrations/0002_add_provider_columns.sql`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/migrations/0002_add_provider_columns.sql).
-Stream event support is added in [`claude_orchestrator/migrations/0003_add_job_stream_events.sql`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/migrations/0003_add_job_stream_events.sql).
+Migrations live in [`claude_orchestrator/migrations/0001_initial.sql`](claude_orchestrator/migrations/0001_initial.sql).
+Provider support is added in [`claude_orchestrator/migrations/0002_add_provider_columns.sql`](claude_orchestrator/migrations/0002_add_provider_columns.sql).
+Stream event support is added in [`claude_orchestrator/migrations/0003_add_job_stream_events.sql`](claude_orchestrator/migrations/0003_add_job_stream_events.sql).
+Integration summary support is added in [`claude_orchestrator/migrations/0004_add_workspace_integrations.sql`](claude_orchestrator/migrations/0004_add_workspace_integrations.sql).
+Saved project support is added in [`claude_orchestrator/migrations/0005_add_saved_projects.sql`](claude_orchestrator/migrations/0005_add_saved_projects.sql).
 
 ## Installation
 
@@ -179,7 +238,7 @@ export ANTHROPIC_API_KEY=...
 
 ## Configuration
 
-The default config format is TOML. A full example lives at [`claude-orchestrator.example.toml`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude-orchestrator.example.toml).
+The default config format is TOML. A full example lives at [`claude-orchestrator.example.toml`](claude-orchestrator.example.toml).
 
 Key settings include:
 
@@ -200,15 +259,33 @@ Key settings include:
 - `backends.claude_code_cli.command_template`
 - `backends.claude_code_cli.allow_hooks`
 - `backends.claude_code_cli.allowed_hook_executables`
-- `backends.codex_cli.command_template`
+- `backends.codex_cli.args`
 - `backends.codex_cli.timeout_seconds`
+- `backends.codex_cli.auth_mode`
 - `backends.codex_cli.use_git_worktree`
 - `storage.sqlite_path`
 - `logging.persist_payloads`
 - `privacy.enabled`
 - `ui.refresh_seconds`
 
+Preferred Codex config:
+
+```toml
+[backends.codex_cli]
+enabled = true
+executable = "codex"
+args = []
+timeout_seconds = 1800
+auth_mode = "auto"
+use_git_worktree = true
+max_output_bytes = 1048576
+```
+
+`args = []` uses the backend's default non-interactive `codex exec PROMPT` behavior. If you need a custom static invocation, add fixed arguments there. Legacy `command_template` remains supported for older configs.
+
 ## CLI Usage
+
+The CLI still works, but the browser is now the primary operator surface for everyday launching and monitoring.
 
 Core commands:
 
@@ -239,17 +316,22 @@ claude-orchestrator config-init
 
 ## Dashboard
 
-The dashboard is a lightweight FastAPI + Jinja2 app with HTMX polling. It shows:
+The dashboard is now the main cockpit for operator control. It shows:
 
 - state counts
+- prominent Create Job and Add Project entry points
+- saved projects with launch shortcuts
+- a one-pass worker convenience control
 - recent jobs across Anthropic and OpenAI providers
 - provider/backend badges and workspace paths
+- compact integration status badges for local-only vs discovered project or user integrations
 - workspace kind, branch/worktree indicators, and recent phase/activity
+- integration detail panels with config paths, capability summaries, backend support, and parser notes
 - retry timing
 - last error summaries
-- job detail pages
+- job detail pages with duplicate and re-run/edit actions
 - live progress panels for active codex_cli jobs
-- retry/cancel actions
+- retry/cancel/duplicate actions from the browser
 - JSON status endpoints at `/api/status`, `/api/jobs`, and `/api/jobs/{job_id}`
 - JSON stream endpoint at `/api/jobs/{job_id}/stream-events`
 - simple provider/backend/status filtering
@@ -278,7 +360,7 @@ This tool is not a consumer-site automation layer. It will not:
 - reuse browser cookies or local storage
 - reverse engineer private consumer endpoints
 
-The rationale and forbidden-pattern checks live in [`claude_orchestrator/guardrails.py`](/Users/hhargrave2024/Documents/GitHub/claudewatcher/claude_orchestrator/guardrails.py).
+The rationale and forbidden-pattern checks live in [`claude_orchestrator/guardrails.py`](claude_orchestrator/guardrails.py).
 
 ## Crash Recovery Model
 
@@ -294,6 +376,7 @@ For subprocess-backed Codex jobs, cancellation also terminates the active child 
 ## Current Limitations
 
 - `codex_cli` remains a bounded subprocess backend in this pass rather than a full interactive session protocol.
+- saved projects are intentionally lightweight; this pass does not add credentials, secret storage, or branch-management policy beyond existing local config and environment handling.
 - The current live activity model is polling-based and deliberately simple; it does not use websockets.
 - Workspace cleanup is intentionally conservative and defaults to `none`.
 - The dashboard is intentionally operational and lightweight rather than a full multi-agent control plane.

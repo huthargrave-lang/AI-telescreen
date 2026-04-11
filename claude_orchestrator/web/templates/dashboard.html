@@ -1,14 +1,18 @@
 {% extends "base.html" %}
-{% block title %}Dashboard · claude-orchestrator{% endblock %}
+{% block title %}Dashboard · AI Telescreen{% endblock %}
 {% block body %}
   <div class="header">
     <div>
-      <h1 class="title">claude-orchestrator</h1>
+      <h1 class="title">AI Telescreen</h1>
       <p class="subtitle">
-        Local-first coding-agent control for Anthropic and OpenAI workflows with durable retries, restart recovery, and no consumer-site automation.
+        Local-first coding-agent control for Anthropic and OpenAI workflows, with durable retries, workspace visibility, and explicit integration awareness.
       </p>
     </div>
-    <div class="pill">Refresh every {{ refresh_seconds }}s</div>
+    <div class="toolbar">
+      <a class="pill" href="/jobs/new">Create Job</a>
+      <a class="pill" href="/projects/new">Add Project</a>
+      <div class="pill">Refresh every {{ refresh_seconds }}s</div>
+    </div>
   </div>
 
   <div
@@ -21,12 +25,77 @@
     {% include "partials/job_counts.html" %}
   </div>
 
+  <div class="grid columns" style="margin-top: 18px;">
+    <section class="panel">
+      <div class="split">
+        <div>
+          <h2 style="margin:0;">Projects</h2>
+          <div class="meta">Saved repos and launch defaults for browser-first job creation.</div>
+        </div>
+        <div class="toolbar">
+          <a class="pill" href="/projects">Open Projects</a>
+          <a class="pill" href="/jobs/new">Create Job</a>
+        </div>
+      </div>
+      {% if projects %}
+        <table style="margin-top: 12px;">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Repo</th>
+              <th>Defaults</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for project in projects %}
+              <tr>
+                <td><a href="/projects/{{ project.id }}">{{ project.name }}</a></td>
+                <td><code>{{ project.repo_path }}</code></td>
+                <td>
+                  <div>{{ project.default_backend or "default backend" }}</div>
+                  <div class="meta">
+                    {{ project.default_provider or "provider auto" }}
+                    {% if project.default_base_branch %} · base {{ project.default_base_branch }}{% endif %}
+                    {% if project.default_use_git_worktree %} · worktree{% endif %}
+                  </div>
+                </td>
+                <td>
+                  <div class="toolbar">
+                    <a class="pill" href="/jobs/new?project_id={{ project.id }}">Launch Job</a>
+                    <a class="pill" href="/projects/{{ project.id }}">Open</a>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="meta" style="margin-top: 12px;">No saved projects yet. Add a project to prefill repo, backend, and worktree defaults.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2 style="margin-top:0;">Worker</h2>
+      <p class="meta">Continuous processing still works best from `claude-orchestrator run-worker`, but you can trigger a one-pass processing cycle from the browser.</p>
+      <div class="meta-list" style="margin-bottom: 12px;">
+        <div>Running jobs: {{ worker_panel.running_jobs }}</div>
+        <div>Queued jobs: {{ worker_panel.queued_jobs }}</div>
+        <div>Waiting retry: {{ worker_panel.waiting_retry_jobs }}</div>
+      </div>
+      <form method="post" action="/worker/run-once?next=/">
+        <button type="submit">Process Due Jobs Once</button>
+      </form>
+    </section>
+  </div>
+
   <div class="panel" style="margin-top: 18px;">
     <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom: 12px;">
       <div>
         <h2 style="margin:0;">Jobs</h2>
-        <div class="meta">Anthropic and OpenAI jobs side by side, with provider, backend, workspace, and retry visibility.</div>
+        <div class="meta">Anthropic and OpenAI jobs side by side, with provider, backend, workspace, integration, and retry visibility.</div>
       </div>
+      <a class="pill" href="/jobs/new">Create Job</a>
     </div>
     <form
       id="job-filters"

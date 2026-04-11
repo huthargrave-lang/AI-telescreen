@@ -8,8 +8,10 @@
       <th>Priority</th>
       <th>Attempts</th>
       <th>Workspace</th>
+      <th>Integration</th>
       <th>Phase / Activity</th>
       <th>Retry / Error</th>
+      <th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -24,8 +26,20 @@
         <td>
           <div>{{ job.metadata.get("workspace_kind") or "directory" }}</div>
           <div class="meta">{{ job.workspace_path or "workspace pending" }}</div>
-          {% if job.branch_name %}
-            <div class="meta">branch {{ job.branch_name }}</div>
+          {% if job.metadata.get("branch_name") %}
+            <div class="meta">branch {{ job.metadata.get("branch_name") }}</div>
+          {% endif %}
+        </td>
+        <td>
+          <div class="pill-row">
+            {% for label in job.metadata.get("integration_summary", {}).get("labels", ["not scanned"]) %}
+              <span class="pill">{{ label }}</span>
+            {% endfor %}
+          </div>
+          {% if job.metadata.get("integration_summary", {}).get("capability_names") %}
+            <div class="meta">
+              {{ job.metadata.get("integration_summary", {}).get("capability_names", []) | join(", ") }}
+            </div>
           {% endif %}
         </td>
         <td>
@@ -42,10 +56,27 @@
             <div class="meta">n/a</div>
           {% endif %}
         </td>
+        <td>
+          <div class="toolbar">
+            <a class="pill" href="/jobs/{{ job.id }}">Open</a>
+            <form method="post" action="/jobs/{{ job.id }}/duplicate?next=/">
+              <button type="submit" class="ghost">Duplicate</button>
+            </form>
+            {% if job.status.value == "running" %}
+              <form method="post" action="/jobs/{{ job.id }}/cancel?next=/">
+                <button type="submit" class="secondary">Cancel</button>
+              </form>
+            {% elif job.status.value in ["failed", "waiting_retry"] %}
+              <form method="post" action="/jobs/{{ job.id }}/retry?next=/">
+                <button type="submit">Retry</button>
+              </form>
+            {% endif %}
+          </div>
+        </td>
       </tr>
     {% else %}
       <tr>
-        <td colspan="9" class="meta">No jobs recorded yet.</td>
+        <td colspan="11" class="meta">No jobs recorded yet.</td>
       </tr>
     {% endfor %}
   </tbody>

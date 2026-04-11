@@ -8,6 +8,7 @@ import pytest
 
 from claude_orchestrator.backends.claude_code_cli import ClaudeCodeCliBackend
 from claude_orchestrator.config import AppConfig
+from claude_orchestrator.integrations import IntegrationCapability, WorkspaceIntegrationSummary
 from claude_orchestrator.models import ConversationState, Job, JobStatus, ProviderName
 from claude_orchestrator.retry import ConfigurationError, PermanentBackendError
 from claude_orchestrator.timeutils import utcnow
@@ -101,3 +102,34 @@ def test_cli_backend_truncates_large_output(monkeypatch, tmp_path):
 
     assert result.response_summary["stdout_truncated"] is True
     assert result.artifacts[0].metadata["stderr_truncated"] is True
+
+
+def test_cli_backend_emits_integration_context_event(monkeypatch, tmp_path):
+    config, context = _context(tmp_path)
+    backend = ClaudeCodeCliBackend(config)
+    events = []
+    context.emit_stream_event = lambda event_type, phase, message, metadata: events.append(
+        (event_type, phase, message, metadata)
+    )
+    context.integration_summary = WorkspaceIntegrationSummary(
+        workspace_path=str((tmp_path / "workspaces" / "cli-job").resolve()),
+        repo_path=None,
+        capabilities=[
+            IntegrationCapability(
+                name="github",
+                source="project_mcp",
+                kind="github_tool",
+            )
+        ],
+        config_paths=[str((tmp_path / ".claude" / "settings.json").resolve())],
+        notes=[],
+    )
+
+    async def fake_exec(*args, **kwargs):
+        return FakeProcess(returncode=0, stdout=b"ok")
+
+    monkeypatch.setattr("claude_orchestrator.backends.claude_code_cli.asyncio.create_subprocess_exec", fake_exec)
+
+    asyncio.run(backend.submit(_job(), ConversationState(job_id="cli-job", system_prompt=None), context))
+
+    assert any(event[0] == "integration_context_loaded" for event in events)

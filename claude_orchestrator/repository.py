@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .db import Database
+from .integrations import WorkspaceIntegrationSummary
 from .models import (
     ArtifactRecord,
     ConversationState,
@@ -18,6 +19,7 @@ from .models import (
     JobStreamEvent,
     JobStatus,
     ProviderName,
+    SavedProject,
     SchedulerEventRecord,
 )
 from .state_machine import ensure_transition
@@ -281,6 +283,70 @@ class JobRepository:
                     state.job_id,
                 ),
             )
+
+    def create_saved_project(
+        self,
+        *,
+        name: str,
+        repo_path: str,
+        default_backend: Optional[str],
+        default_provider: Optional[str],
+        default_base_branch: Optional[str],
+        default_use_git_worktree: bool,
+        notes: Optional[str],
+    ) -> SavedProject:
+        project_id = str(uuid.uuid4())
+        now = utcnow()
+        with self.db.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO saved_projects (
+                    id,
+                    name,
+                    repo_path,
+                    default_backend,
+                    default_provider,
+                    default_base_branch,
+                    default_use_git_worktree,
+                    notes,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    name,
+                    repo_path,
+                    default_backend,
+                    default_provider,
+                    default_base_branch,
+                    1 if default_use_git_worktree else 0,
+                    notes,
+                    to_iso8601(now),
+                    to_iso8601(now),
+                ),
+            )
+        return self.get_saved_project(project_id)
+
+    def list_saved_projects(self) -> List[SavedProject]:
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM saved_projects
+                ORDER BY updated_at DESC, name ASC
+                """
+            ).fetchall()
+        return [self._row_to_saved_project(row) for row in rows]
+
+    def get_saved_project(self, project_id: str) -> SavedProject:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM saved_projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(f"Unknown project: {project_id}")
+        return self._row_to_saved_project(row)
 
     def claim_job(self, job_id: str, worker_id: str, lease_seconds: float = 300) -> Optional[Job]:
         now = utcnow()
@@ -824,6 +890,69 @@ class JobRepository:
             for row in rows
         ]
 
+    def save_workspace_integration_summary(
+        self,
+        summary: WorkspaceIntegrationSummary,
+        *,
+        job_id: Optional[str] = None,
+        source_kind: str = "workspace_scan",
+    ) -> bool:
+        discovered_at = utcnow()
+        summary_json = json.dumps(summary.to_dict(), sort_keys=True)
+        with self.db.connect() as connection:
+            if job_id:
+                row = connection.execute(
+                    """
+                    SELECT summary_json
+                    FROM workspace_integrations
+                    WHERE job_id = ?
+                    ORDER BY discovered_at DESC
+                    LIMIT 1
+                    """,
+                    (job_id,),
+                ).fetchone()
+                if row is not None and row["summary_json"] == summary_json:
+                    return False
+            connection.execute(
+                """
+                INSERT INTO workspace_integrations (
+                    id,
+                    job_id,
+                    workspace_path,
+                    repo_path,
+                    discovered_at,
+                    source_kind,
+                    summary_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    job_id,
+                    summary.workspace_path,
+                    summary.repo_path,
+                    to_iso8601(discovered_at),
+                    source_kind,
+                    summary_json,
+                ),
+            )
+        return True
+
+    def get_workspace_integration_summary_for_job(self, job_id: str) -> Optional[WorkspaceIntegrationSummary]:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT summary_json
+                FROM workspace_integrations
+                WHERE job_id = ?
+                ORDER BY discovered_at DESC
+                LIMIT 1
+                """,
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return WorkspaceIntegrationSummary.from_dict(json.loads(row["summary_json"]))
+
     def get_stream_events(self, job_id: str, limit: int = 200) -> List[JobStreamEvent]:
         with self.db.connect() as connection:
             rows = connection.execute(
@@ -1084,6 +1213,20 @@ class JobRepository:
             headers=_loads(row["headers_json"]),
             error=_loads(row["error_json"]),
             exit_reason=row["exit_reason"],
+        )
+
+    def _row_to_saved_project(self, row: Any) -> SavedProject:
+        return SavedProject(
+            id=row["id"],
+            name=row["name"],
+            repo_path=row["repo_path"],
+            default_backend=row["default_backend"],
+            default_provider=row["default_provider"],
+            default_base_branch=row["default_base_branch"],
+            default_use_git_worktree=bool(row["default_use_git_worktree"]),
+            notes=row["notes"],
+            created_at=from_iso8601(row["created_at"]) or utcnow(),
+            updated_at=from_iso8601(row["updated_at"]) or utcnow(),
         )
 
     def _row_to_stream_event(self, row: Any) -> JobStreamEvent:

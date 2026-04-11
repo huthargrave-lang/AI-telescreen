@@ -4,7 +4,8 @@ import sqlite3
 from pathlib import Path
 
 from claude_orchestrator.db import Database
-from claude_orchestrator.models import ProviderName
+from claude_orchestrator.integrations import IntegrationCapability, WorkspaceIntegrationSummary
+from claude_orchestrator.models import JobStatus, ProviderName
 from claude_orchestrator.providers import infer_provider, validate_provider_backend
 from claude_orchestrator.repository import JobRepository
 from tests.helpers import build_test_orchestrator, create_job
@@ -100,6 +101,85 @@ def test_stream_event_round_trip(tmp_path):
     assert events[0].phase == "planning"
     assert latest is not None
     assert latest.message == "Planning next step."
+
+
+def test_workspace_integration_summary_round_trip(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    job = create_job(orchestrator)
+    summary = WorkspaceIntegrationSummary(
+        workspace_path=job.workspace_path or "",
+        repo_path=None,
+        capabilities=[
+            IntegrationCapability(
+                name="github",
+                source="project_mcp",
+                kind="github_tool",
+                metadata={"command": "npx"},
+            )
+        ],
+        config_paths=[str((tmp_path / ".claude" / "settings.json").resolve())],
+        notes=["project config discovered"],
+    )
+
+    assert repository.save_workspace_integration_summary(summary, job_id=job.id) is True
+    loaded = repository.get_workspace_integration_summary_for_job(job.id)
+
+    assert loaded is not None
+    assert loaded.status() == "integration-enabled"
+    assert loaded.capabilities[0].name == "github"
+    assert repository.save_workspace_integration_summary(summary, job_id=job.id) is False
+
+
+def test_saved_project_round_trip(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+
+    project = orchestrator.create_saved_project(
+        name="AI Telescreen Repo",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=True,
+        notes="primary repo",
+    )
+
+    loaded = repository.get_saved_project(project.id)
+    projects = repository.list_saved_projects()
+
+    assert loaded.name == "AI Telescreen Repo"
+    assert loaded.default_use_git_worktree is True
+    assert projects[0].id == project.id
+
+
+def test_launch_job_from_project_and_duplicate_job(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    project = orchestrator.create_saved_project(
+        name="Launch Repo",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes=None,
+    )
+
+    launched = orchestrator.launch_job_from_project(
+        project.id,
+        prompt="ship it",
+        task_type="code",
+        priority=7,
+        max_attempts=3,
+    )
+    duplicate = orchestrator.duplicate_job(launched.id)
+
+    assert launched.metadata["project_id"] == project.id
+    assert launched.metadata["repo_path"] == str(tmp_path.resolve())
+    assert launched.priority == 7
+    assert launched.max_attempts == 3
+    assert duplicate.id != launched.id
+    assert duplicate.metadata["project_id"] == project.id
+    assert duplicate.metadata["repo_path"] == str(tmp_path.resolve())
+    assert repository.get_job(duplicate.id).status == JobStatus.QUEUED
 
 
 def test_migration_adds_provider_columns_with_safe_defaults(tmp_path):

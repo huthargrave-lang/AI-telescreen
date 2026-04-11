@@ -21,12 +21,16 @@ class ClaudeCodeCliBackend(BackendAdapter):
 
     name = "claude_code_cli"
     SHELL_EXECUTABLES = {"bash", "sh", "zsh", "fish", "pwsh", "powershell"}
+    supports_workspace_integrations = True
+    supports_project_mcp = True
+    supports_user_mcp = True
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.retry_policy = RetryPolicy(config.retry)
 
     async def submit(self, job: Job, state: ConversationState, context: BackendContext) -> BackendResult:
+        self._emit_integration_context(context)
         workspace = ensure_job_workspace(context.workspace_root, job.id)
         prompt = resolve_job_prompt(job)
         prompt_file = workspace / "cli_prompt.txt"
@@ -228,3 +232,22 @@ class ClaudeCodeCliBackend(BackendAdapter):
             if len(chunk) > remaining:
                 truncated = True
         return b"".join(chunks).decode("utf-8", errors="replace"), truncated
+
+    def _emit_integration_context(self, context: BackendContext) -> None:
+        emit_stream_event = getattr(context, "emit_stream_event", None)
+        integration_summary = getattr(context, "integration_summary", None)
+        if emit_stream_event is None or integration_summary is None:
+            return
+        capability_names = [capability.name for capability in integration_summary.external_capabilities()]
+        if not capability_names:
+            return
+        emit_stream_event(
+            "integration_context_loaded",
+            "setup",
+            "Loaded workspace integration context for Claude Code CLI.",
+            {
+                "capability_names": capability_names,
+                "config_paths": integration_summary.config_paths,
+                "status": integration_summary.status(),
+            },
+        )

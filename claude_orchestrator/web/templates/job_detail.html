@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Job {{ job.id }} · claude-orchestrator{% endblock %}
+{% block title %}Job {{ job.id }} · AI Telescreen{% endblock %}
 {% block body %}
   <div class="header">
     <div>
@@ -16,6 +16,13 @@
       <form method="post" action="/jobs/{{ job.id }}/cancel">
         <button type="submit" class="secondary">Cancel</button>
       </form>
+      <form method="post" action="/jobs/{{ job.id }}/duplicate">
+        <button type="submit" class="ghost">Duplicate</button>
+      </form>
+      <a class="pill" href="/jobs/new?from_job={{ job.id }}">Re-run / Edit</a>
+      {% if job.metadata.get("project_id") %}
+        <a class="pill" href="/projects/{{ job.metadata.get('project_id') }}">Project</a>
+      {% endif %}
     </div>
   </div>
 
@@ -26,6 +33,8 @@
     >
       {% include "partials/job_overview.html" %}
     </div>
+
+    {% include "partials/job_integrations.html" %}
 
     <section class="panel">
       <h2 style="margin-top:0;">Conversation State</h2>
