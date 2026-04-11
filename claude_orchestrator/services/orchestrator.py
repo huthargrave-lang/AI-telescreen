@@ -47,6 +47,7 @@ from ..workspaces import (
     store_response_artifact,
 )
 from ..backends.base import BackendAdapter, BatchCapableBackend, BackendContext
+from .project_manager import ProjectManagerService
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +185,7 @@ class OrchestratorService:
         self.backends = backends
         self.config_path = config_path
         self.retry_policy = RetryPolicy(config.retry)
+        self.project_manager = ProjectManagerService(repository)
 
     def enqueue(self, request: EnqueueJobRequest) -> Job:
         backend_name = request.backend or self.config.default_backend
@@ -304,7 +306,7 @@ class OrchestratorService:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
             raise ValueError(f"Repository path does not exist or is not a directory: {resolved_repo_path}")
-        return self.repository.create_saved_project(
+        project = self.repository.create_saved_project(
             name=name,
             repo_path=str(resolved_repo_path),
             default_backend=default_backend,
@@ -313,6 +315,8 @@ class OrchestratorService:
             default_use_git_worktree=default_use_git_worktree,
             notes=notes,
         )
+        self.project_manager.sync_project(project.id)
+        return project
 
     def update_saved_project(
         self,
@@ -329,7 +333,7 @@ class OrchestratorService:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
             raise ValueError(f"Repository path does not exist or is not a directory: {resolved_repo_path}")
-        return self.repository.update_saved_project(
+        project = self.repository.update_saved_project(
             project_id,
             name=name,
             repo_path=str(resolved_repo_path),
@@ -339,6 +343,8 @@ class OrchestratorService:
             default_use_git_worktree=default_use_git_worktree,
             notes=notes,
         )
+        self.project_manager.sync_project(project.id)
+        return project
 
     def launch_job_from_project(
         self,
@@ -538,6 +544,14 @@ class OrchestratorService:
         project_path = Path(project.repo_path).expanduser()
         repo_path = project_path if (project_path / ".git").exists() else None
         return self._discover_integration_summary(project_path, repo_path)
+
+    def get_project_manager_snapshot(self, project_id: str):
+        self.repository.get_saved_project(project_id)
+        return self.project_manager.get_snapshot(project_id)
+
+    def compact_project_manager_state(self, project_id: str):
+        self.repository.get_saved_project(project_id)
+        return self.project_manager.compact_manager_state(project_id)
 
     def run_backend_smoke_test(self, backend_name: str) -> BackendSmokeTestResult:
         if backend_name != "codex_cli":
@@ -987,6 +1001,7 @@ class OrchestratorService:
                     event_type="job.recovery.failed",
                     event_detail={"reason": "backend_disabled"},
                 )
+                self._ingest_project_manager_outcome(job.id, error_reason="backend_disabled")
                 recovered.append(job.id)
                 continue
             state = self.repository.get_conversation_state(job.id)
@@ -1314,6 +1329,7 @@ class OrchestratorService:
                         event_type="batch_incomplete",
                         event_detail={"status": poll_result.status},
                     )
+                    self._ingest_project_manager_outcome(job_id, error_reason="batch_incomplete")
                     processed += 1
         return processed
 
@@ -1341,6 +1357,29 @@ class OrchestratorService:
             "supports_user_mcp": supports_user_mcp,
             "effective_mode": effective_mode,
         }
+
+    def _ingest_project_manager_outcome(
+        self,
+        job_id: str,
+        *,
+        response_summary: Optional[Dict[str, Any]] = None,
+        needs_followup: bool = False,
+        followup_reason: Optional[str] = None,
+        error_reason: Optional[str] = None,
+    ) -> None:
+        try:
+            self.project_manager.ingest_job_outcome(
+                job_id,
+                response_summary=response_summary,
+                needs_followup=needs_followup,
+                followup_reason=followup_reason,
+                error_reason=error_reason,
+            )
+        except Exception:
+            logger.exception(
+                "project_manager.ingest_failed",
+                extra={"context": {"job_id": job_id}},
+            )
 
     def _persist_success(
         self,
@@ -1394,6 +1433,12 @@ class OrchestratorService:
                 metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
             self._maybe_cleanup_workspace(job, outcome="completed")
+            self._ingest_project_manager_outcome(
+                job.id,
+                response_summary=result.response_summary,
+                needs_followup=result.needs_followup,
+                followup_reason=result.followup_reason,
+            )
         elif result.status == JobStatus.QUEUED:
             metadata_updates, metadata_remove_keys = self._followup_metadata(job, result)
             self.repository.update_job_status(
@@ -1431,6 +1476,12 @@ class OrchestratorService:
             )
             if result.status in {JobStatus.FAILED, JobStatus.CANCELLED}:
                 self._maybe_cleanup_workspace(job, outcome=result.status.value)
+            if result.status == JobStatus.FAILED:
+                self._ingest_project_manager_outcome(
+                    job.id,
+                    response_summary=result.response_summary,
+                    error_reason=result.exit_reason,
+                )
 
     def _persist_failure(
         self,
@@ -1496,6 +1547,10 @@ class OrchestratorService:
                 metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
             )
             self._maybe_cleanup_workspace(job, outcome="failed")
+            self._ingest_project_manager_outcome(
+                job.id,
+                error_reason=decision.reason,
+            )
 
     def _persist_interrupted(
         self,

@@ -192,3 +192,71 @@ class SavedProject:
     notes: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass
+class ProjectManagerRecommendation:
+    decision: str
+    reason: str
+    next_task: Optional[Dict[str, Any]] = None
+    manual_test_checklist: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "decision": self.decision,
+            "reason": self.reason,
+            "next_task": self.next_task,
+            "manual_test_checklist": list(self.manual_test_checklist),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Optional[Dict[str, Any]]) -> Optional["ProjectManagerRecommendation"]:
+        if not payload:
+            return None
+        return cls(
+            decision=str(payload.get("decision") or "wait_for_operator"),
+            reason=str(payload.get("reason") or ""),
+            next_task=payload.get("next_task") if isinstance(payload.get("next_task"), dict) else None,
+            manual_test_checklist=[
+                str(item)
+                for item in (payload.get("manual_test_checklist") or [])
+                if str(item).strip()
+            ],
+        )
+
+
+@dataclass
+class ProjectManagerEvent:
+    id: str
+    project_id: str
+    created_at: datetime
+    event_type: str
+    source_job_id: Optional[str] = None
+    attempt_number: Optional[int] = None
+    outcome_status: Optional[str] = None
+    summary: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ProjectManagerState:
+    project_id: str
+    current_phase: str
+    summary: str
+    stable_project_facts: Dict[str, Any] = field(default_factory=dict)
+    testing_status: str = "not_requested"
+    needs_manual_testing: bool = False
+    rolling_summary: Optional[str] = None
+    rolling_facts: Dict[str, Any] = field(default_factory=dict)
+    latest_recommendation: Optional[ProjectManagerRecommendation] = None
+    latest_recommendation_type: Optional[str] = None
+    latest_recommendation_reason: Optional[str] = None
+    last_job_ingested_at: Optional[datetime] = None
+    last_compacted_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+@dataclass
+class ProjectManagerSnapshot:
+    state: ProjectManagerState
+    recent_events: List[ProjectManagerEvent] = field(default_factory=list)

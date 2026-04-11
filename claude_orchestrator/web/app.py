@@ -158,6 +158,57 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "notes": project.notes,
         }
 
+    def serialize_project_manager(snapshot) -> dict:
+        recommendation = snapshot.state.latest_recommendation
+        return {
+            "state": {
+                "current_phase": snapshot.state.current_phase,
+                "summary": snapshot.state.summary,
+                "testing_status": snapshot.state.testing_status,
+                "needs_manual_testing": snapshot.state.needs_manual_testing,
+                "rolling_summary": snapshot.state.rolling_summary,
+                "stable_project_facts": snapshot.state.stable_project_facts,
+                "last_job_ingested_at": snapshot.state.last_job_ingested_at.isoformat()
+                if snapshot.state.last_job_ingested_at
+                else None,
+                "last_compacted_at": snapshot.state.last_compacted_at.isoformat()
+                if snapshot.state.last_compacted_at
+                else None,
+            },
+            "recommendation": (
+                {
+                    "decision": recommendation.decision,
+                    "reason": recommendation.reason,
+                    "next_task": recommendation.next_task,
+                    "manual_test_checklist": recommendation.manual_test_checklist,
+                }
+                if recommendation
+                else None
+            ),
+            "recent_events": [
+                {
+                    "id": event.id,
+                    "created_at": event.created_at.isoformat(),
+                    "event_type": event.event_type,
+                    "source_job_id": event.source_job_id,
+                    "source_job_short_id": _short_id(event.source_job_id) if event.source_job_id else None,
+                    "attempt_number": event.attempt_number,
+                    "outcome_status": event.outcome_status,
+                    "prompt": event.summary.get("prompt"),
+                    "provider": event.summary.get("provider"),
+                    "backend": event.summary.get("backend"),
+                    "task_type": event.summary.get("task_type"),
+                    "response_summary_preview": event.summary.get("response_summary_preview"),
+                    "error_summary": event.summary.get("error_summary"),
+                    "error_reason": event.summary.get("error_reason"),
+                    "manual_testing_needed": bool(event.summary.get("manual_testing_needed")),
+                    "changed_files": event.summary.get("changed_files") or [],
+                    "stream_highlights": event.summary.get("stream_highlights") or [],
+                }
+                for event in snapshot.recent_events
+            ],
+        }
+
     def _job_detail_context(request: Request, job_id: str) -> dict:
         details = orchestrator.inspect(job_id)
         lifecycle = orchestrator.describe_job_lifecycle(details.job)
@@ -749,6 +800,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         project = orchestrator.get_saved_project(project_id)
         jobs = [serialize_job(job) for job in orchestrator.list_project_jobs(project_id, limit=20)]
         integration_summary = orchestrator.get_project_integration_summary(project_id)
+        project_manager = orchestrator.get_project_manager_snapshot(project_id)
         return templates.TemplateResponse(
             request=request,
             name="project_detail.html",
@@ -758,6 +810,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "project_display": serialize_project(project),
                 "jobs": jobs,
                 "integration": serialize_project_integration(integration_summary),
+                "project_manager": serialize_project_manager(project_manager),
             },
         )
 

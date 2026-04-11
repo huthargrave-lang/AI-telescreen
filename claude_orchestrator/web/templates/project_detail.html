@@ -158,6 +158,151 @@
   </div>
 
   <section class="panel" style="margin-top: 18px;">
+    <div class="split">
+      <div>
+        <h2 style="margin-top:0;">Project Manager</h2>
+        <p class="meta">The project manager keeps compact memory for this saved project, ingests completed and failed jobs, and recommends the next operator step without launching anything automatically.</p>
+      </div>
+      <div class="pill-row">
+        <span class="pill small">phase {{ project_manager.state.current_phase }}</span>
+        <span class="pill small">{{ project_manager.state.testing_status }}</span>
+        {% if project_manager.state.needs_manual_testing %}
+          <span class="pill small status-pill status-waiting_retry">manual testing needed</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="summary-grid two" style="margin-top: 12px;">
+      <div>
+        <div class="meta">Current summary</div>
+        <div class="value-block">{{ project_manager.state.summary }}</div>
+      </div>
+      <div>
+        <div class="meta">Latest recommendation</div>
+        <div class="value-block">
+          {% if project_manager.recommendation %}
+            <strong>{{ project_manager.recommendation.decision }}</strong><br />
+            {{ project_manager.recommendation.reason }}
+          {% else %}
+            No recommendation recorded yet.
+          {% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="meta">Last ingested outcome</div>
+        <div>{{ project_manager.state.last_job_ingested_at or "n/a" }}</div>
+      </div>
+      <div>
+        <div class="meta">Last compaction</div>
+        <div>{{ project_manager.state.last_compacted_at or "n/a" }}</div>
+      </div>
+    </div>
+    {% if project_manager.state.rolling_summary %}
+      <div style="margin-top: 12px;">
+        <div class="meta">Rolling summary</div>
+        <div class="value-block">{{ project_manager.state.rolling_summary }}</div>
+      </div>
+    {% endif %}
+    {% if project_manager.recommendation and project_manager.recommendation.next_task %}
+      <div style="margin-top: 12px;">
+        <div class="meta">Recommended follow-up task</div>
+        <div class="summary-grid two">
+          <div>
+            <div class="meta">Backend</div>
+            <div>{{ project_manager.recommendation.next_task.backend }}</div>
+          </div>
+          <div>
+            <div class="meta">Task type</div>
+            <div>{{ project_manager.recommendation.next_task.task_type }}</div>
+          </div>
+        </div>
+        <div class="value-block" style="margin-top: 10px;">{{ project_manager.recommendation.next_task.prompt }}</div>
+      </div>
+    {% endif %}
+    {% if project_manager.recommendation and project_manager.recommendation.manual_test_checklist %}
+      <div style="margin-top: 12px;">
+        <div class="meta">Manual test checklist</div>
+        <ul>
+          {% for item in project_manager.recommendation.manual_test_checklist %}
+            <li>{{ item }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+    <div style="margin-top: 12px;">
+      <div class="meta">Recent ingested outcomes</div>
+      {% if project_manager.recent_events %}
+        <div class="table-wrap">
+          <table class="data-table" style="margin-top: 8px; min-width: 760px;">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Status</th>
+                <th>Backend</th>
+                <th>Prompt</th>
+                <th>Outcome</th>
+                <th>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for event in project_manager.recent_events %}
+                <tr>
+                  <td>
+                    <div class="stack-compact tight">
+                      {% if event.source_job_id %}
+                        <a href="/jobs/{{ event.source_job_id }}" title="{{ event.source_job_id }}">
+                          <span class="mono-inline">{{ event.source_job_short_id }}</span>
+                        </a>
+                      {% else %}
+                        <span class="mono-inline">n/a</span>
+                      {% endif %}
+                      <div class="meta">attempt {{ event.attempt_number or "n/a" }} · {{ event.created_at }}</div>
+                    </div>
+                  </td>
+                  <td><span class="pill small status-pill status-{{ event.outcome_status }}">{{ event.outcome_status }}</span></td>
+                  <td>
+                    <div class="stack-compact tight">
+                      <span class="pill small">{{ event.backend or "n/a" }}</span>
+                      <span class="meta">{{ event.provider or "n/a" }}</span>
+                    </div>
+                  </td>
+                  <td><div class="truncate-2" title="{{ event.prompt }}">{{ event.prompt or "n/a" }}</div></td>
+                  <td>
+                    {% if event.error_summary or event.error_reason %}
+                      <div class="truncate-2" title="{{ event.error_summary or event.error_reason }}">{{ event.error_summary or event.error_reason }}</div>
+                    {% else %}
+                      <div class="truncate-2" title="{{ event.response_summary_preview }}">{{ event.response_summary_preview or "Completed without an explicit summary." }}</div>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <div class="stack-compact tight">
+                      {% if event.manual_testing_needed %}
+                        <span class="pill small status-pill status-waiting_retry">manual test</span>
+                      {% endif %}
+                      {% if event.changed_files %}
+                        <div class="meta truncate-2" title="{{ event.changed_files | join(', ') }}">
+                          {{ event.changed_files | join(", ") }}
+                        </div>
+                      {% elif event.stream_highlights %}
+                        <div class="meta truncate-2" title="{{ event.stream_highlights | join(' | ') }}">
+                          {{ event.stream_highlights | join(" | ") }}
+                        </div>
+                      {% else %}
+                        <div class="meta">No extra notes</div>
+                      {% endif %}
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="meta">No completed or failed jobs have been ingested into project-manager memory yet.</p>
+      {% endif %}
+    </div>
+  </section>
+
+  <section class="panel" style="margin-top: 18px;">
     <h2 style="margin-top:0;">Recent Launches</h2>
     <p class="meta">Recent jobs created from this project appear here so you can reopen them, retry them, cancel queued work, or clean up throwaway runs.</p>
     {% if jobs %}

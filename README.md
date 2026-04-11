@@ -16,6 +16,7 @@ The codebase is one-language Python and splits responsibilities cleanly:
 - `claude_orchestrator/repository.py`: durable SQLite persistence for jobs, runs, conversation state, artifacts, scheduler events, and message batch metadata.
 - `claude_orchestrator/workspaces.py`: safe per-job workspace preparation, optional git worktree creation, and conservative cleanup helpers.
 - `claude_orchestrator/services/orchestrator.py`: central orchestration logic for enqueue, retry, cancel, crash recovery, batch polling, and state transitions.
+- `claude_orchestrator/services/project_manager.py`: compact per-project memory, outcome ingestion, and advisory next-step recommendations.
 - `claude_orchestrator/services/worker.py`: scheduler/worker loop with concurrency limits and duplicate-claim prevention.
 - `claude_orchestrator/backends/`: pluggable backend adapters.
 - `claude_orchestrator/web/`: FastAPI + Jinja2 + HTMX dashboard.
@@ -155,6 +156,39 @@ Saved projects capture lightweight defaults such as:
 Jobs launched from a saved project now persist `project_id` on the job record so project detail pages can show recent launches without depending on brittle metadata parsing.
 
 Projects are templates and launch points, not active tasks themselves. The active work always lives in jobs.
+
+## Project Manager
+
+AI Telescreen now keeps a lightweight project-manager memory layer for each saved project.
+
+For each project, the manager keeps compact durable state such as:
+
+- current phase
+- a rolling summary of earlier outcomes
+- stable project facts from the saved project defaults
+- manual-testing status
+- the latest structured recommendation
+
+The manager ingests completed and failed jobs that were launched from a saved project and records compact structured outcomes instead of raw transcripts. It captures useful fields such as:
+
+- job id, backend, provider, and task type
+- prompt preview
+- recent stream highlights
+- changed-file hints when available
+- artifact summaries
+- failure summary and retry context
+
+Recommendations are advisory only in this pass. The manager can recommend actions such as:
+
+- `request_manual_test`
+- `launch_followup_job`
+- `wait_for_operator`
+- `mark_complete`
+- `needs_clarification`
+
+The manager does not auto-enqueue follow-up jobs yet. It surfaces the recommendation on the project page so operators can decide whether to launch the suggested next task.
+
+To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events per project and compacts older outcomes into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log.
 
 ## Diagnostics and Doctor
 

@@ -18,6 +18,10 @@ from .models import (
     JobRun,
     JobStreamEvent,
     JobStatus,
+    ProjectManagerEvent,
+    ProjectManagerRecommendation,
+    ProjectManagerSnapshot,
+    ProjectManagerState,
     ProviderName,
     SavedProject,
     SchedulerEventRecord,
@@ -406,6 +410,145 @@ class JobRepository:
                 (project_id, limit),
             ).fetchall()
         return [self._row_to_job(row) for row in rows]
+
+    def get_project_manager_state(self, project_id: str) -> Optional[ProjectManagerState]:
+        with self.db.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM project_manager_states
+                WHERE project_id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+        return self._row_to_project_manager_state(row) if row else None
+
+    def upsert_project_manager_state(self, state: ProjectManagerState) -> ProjectManagerState:
+        created_at = state.created_at or utcnow()
+        updated_at = state.updated_at or utcnow()
+        latest_recommendation_json = (
+            json.dumps(state.latest_recommendation.to_dict(), sort_keys=True)
+            if state.latest_recommendation is not None
+            else None
+        )
+        with self.db.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO project_manager_states (
+                    project_id,
+                    current_phase,
+                    summary,
+                    stable_project_facts_json,
+                    testing_status,
+                    needs_manual_testing,
+                    rolling_summary,
+                    rolling_facts_json,
+                    latest_recommendation_type,
+                    latest_recommendation_reason,
+                    latest_recommendation_json,
+                    last_job_ingested_at,
+                    last_compacted_at,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    current_phase = excluded.current_phase,
+                    summary = excluded.summary,
+                    stable_project_facts_json = excluded.stable_project_facts_json,
+                    testing_status = excluded.testing_status,
+                    needs_manual_testing = excluded.needs_manual_testing,
+                    rolling_summary = excluded.rolling_summary,
+                    rolling_facts_json = excluded.rolling_facts_json,
+                    latest_recommendation_type = excluded.latest_recommendation_type,
+                    latest_recommendation_reason = excluded.latest_recommendation_reason,
+                    latest_recommendation_json = excluded.latest_recommendation_json,
+                    last_job_ingested_at = excluded.last_job_ingested_at,
+                    last_compacted_at = excluded.last_compacted_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    state.project_id,
+                    state.current_phase,
+                    state.summary,
+                    _dumps(state.stable_project_facts),
+                    state.testing_status,
+                    1 if state.needs_manual_testing else 0,
+                    state.rolling_summary,
+                    _dumps(state.rolling_facts),
+                    state.latest_recommendation_type,
+                    state.latest_recommendation_reason,
+                    latest_recommendation_json,
+                    to_iso8601(state.last_job_ingested_at),
+                    to_iso8601(state.last_compacted_at),
+                    to_iso8601(created_at),
+                    to_iso8601(updated_at),
+                ),
+            )
+        return self.get_project_manager_state(state.project_id) or state
+
+    def add_project_manager_event(self, event: ProjectManagerEvent) -> bool:
+        with self.db.connect() as connection:
+            inserted = connection.execute(
+                """
+                INSERT OR IGNORE INTO project_manager_events (
+                    id,
+                    project_id,
+                    source_job_id,
+                    attempt_number,
+                    outcome_status,
+                    event_type,
+                    created_at,
+                    summary_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.id,
+                    event.project_id,
+                    event.source_job_id,
+                    event.attempt_number,
+                    event.outcome_status,
+                    event.event_type,
+                    to_iso8601(event.created_at),
+                    _dumps(event.summary),
+                ),
+            )
+        return inserted.rowcount == 1
+
+    def list_project_manager_events(
+        self,
+        project_id: str,
+        *,
+        limit: Optional[int] = 20,
+    ) -> List[ProjectManagerEvent]:
+        limit_clause = "LIMIT ?" if limit is not None else ""
+        params: List[Any] = [project_id]
+        if limit is not None:
+            params.append(limit)
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM project_manager_events
+                WHERE project_id = ?
+                ORDER BY created_at DESC
+                {limit_clause}
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._row_to_project_manager_event(row) for row in rows]
+
+    def delete_project_manager_events(self, project_id: str, event_ids: Sequence[str]) -> int:
+        if not event_ids:
+            return 0
+        placeholders = ",".join("?" for _ in event_ids)
+        with self.db.connect() as connection:
+            deleted = connection.execute(
+                f"""
+                DELETE FROM project_manager_events
+                WHERE project_id = ?
+                  AND id IN ({placeholders})
+                """,
+                (project_id, *event_ids),
+            )
+        return deleted.rowcount
 
     def list_recent_jobs(self, *, limit: int = 100) -> List[Job]:
         with self.db.connect() as connection:
@@ -1312,6 +1455,41 @@ class JobRepository:
             notes=row["notes"],
             created_at=from_iso8601(row["created_at"]) or utcnow(),
             updated_at=from_iso8601(row["updated_at"]) or utcnow(),
+        )
+
+    def _row_to_project_manager_state(self, row: Any) -> ProjectManagerState:
+        return ProjectManagerState(
+            project_id=row["project_id"],
+            current_phase=row["current_phase"],
+            summary=row["summary"],
+            stable_project_facts=_loads(row["stable_project_facts_json"]),
+            testing_status=row["testing_status"],
+            needs_manual_testing=bool(row["needs_manual_testing"]),
+            rolling_summary=row["rolling_summary"],
+            rolling_facts=_loads(row["rolling_facts_json"]),
+            latest_recommendation=ProjectManagerRecommendation.from_dict(
+                json.loads(row["latest_recommendation_json"])
+                if row["latest_recommendation_json"]
+                else None
+            ),
+            latest_recommendation_type=row["latest_recommendation_type"],
+            latest_recommendation_reason=row["latest_recommendation_reason"],
+            last_job_ingested_at=from_iso8601(row["last_job_ingested_at"]),
+            last_compacted_at=from_iso8601(row["last_compacted_at"]),
+            created_at=from_iso8601(row["created_at"]),
+            updated_at=from_iso8601(row["updated_at"]),
+        )
+
+    def _row_to_project_manager_event(self, row: Any) -> ProjectManagerEvent:
+        return ProjectManagerEvent(
+            id=row["id"],
+            project_id=row["project_id"],
+            created_at=from_iso8601(row["created_at"]) or utcnow(),
+            event_type=row["event_type"],
+            source_job_id=row["source_job_id"],
+            attempt_number=row["attempt_number"],
+            outcome_status=row["outcome_status"],
+            summary=_loads(row["summary_json"]),
         )
 
     def _row_to_stream_event(self, row: Any) -> JobStreamEvent:

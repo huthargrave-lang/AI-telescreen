@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -10,6 +11,7 @@ from claude_orchestrator.diagnostics import BackendSmokeTestResult, DiagnosticCh
 from claude_orchestrator.models import EnqueueJobRequest, JobStatus
 from claude_orchestrator.services.orchestrator import OrchestratorService
 from claude_orchestrator.web.app import build_app
+from tests.helpers import CompletedBackend
 
 fastapi = pytest.importorskip("fastapi")
 testclient = pytest.importorskip("fastapi.testclient")
@@ -48,7 +50,7 @@ def test_web_create_job_retry_cancel_and_duplicate_flow(tmp_path):
         root=context.root,
         config=context.config,
         repository=context.repository,
-        backends=context.backends,
+        backends={"messages_api": CompletedBackend()},
     )
     app = build_app(root=tmp_path)
     client = TestClient(app)
@@ -416,3 +418,40 @@ def test_web_tables_render_compact_ids_and_paths(tmp_path):
     assert job_detail.status_code == 200
     assert job.id in job_detail.text
     assert "Raw job metadata" in job_detail.text
+
+
+def test_project_detail_renders_project_manager_summary(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Manager UI",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="browser project",
+    )
+    job = orchestrator.launch_job_from_project(
+        project.id,
+        prompt="Refine the dashboard browser layout and badge summaries.",
+        task_type="code",
+    )
+    asyncio.run(orchestrator.run_job_now(job.id, worker_id="worker-manager-ui"))
+
+    detail = client.get(f"/projects/{project.id}")
+
+    assert detail.status_code == 200
+    assert "Project Manager" in detail.text
+    assert "request_manual_test" in detail.text
+    assert "manual testing needed" in detail.text
+    assert "Manual test checklist" in detail.text
+    assert _short_id(job.id) in detail.text

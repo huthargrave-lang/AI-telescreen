@@ -7,7 +7,7 @@
 3. Open the AI Telescreen dashboard and create or launch a job from the browser.
 4. Start a worker with `claude-orchestrator run-worker`.
 5. Open `/doctor` when you need a quick health check for config, backends, integrations, and Codex availability.
-6. Use the browser for job monitoring, retry, cancel, duplication, saved-project launch, project editing, recent-launch history, and optional one-pass worker cycles.
+6. Use the browser for job monitoring, retry, cancel, duplication, saved-project launch, project editing, recent-launch history, project-manager recommendations, and optional one-pass worker cycles.
 
 ## Provider and Backend
 
@@ -46,6 +46,17 @@
 - Project detail pages now show recent launches tied back to that project via a durable `project_id` job link.
 - Projects are saved launch defaults, not active tasks themselves.
 
+## Project Manager
+
+- Every saved project now has a compact durable project-manager state.
+- The manager ingests completed and failed project-linked jobs and keeps a rolling summary of what has happened.
+- It tracks current phase, manual-testing status, recent important outcomes, and the latest recommendation.
+- Recommendations are advisory in this pass. The manager does not auto-launch follow-up work.
+- Common recommendation types include `request_manual_test`, `launch_followup_job`, `wait_for_operator`, and `mark_complete`.
+- Manual-testing recommendations are especially likely after browser-facing or UI-heavy changes.
+- Older manager events are compacted into a rolling summary so memory stays bounded instead of growing around raw transcripts.
+- The project page is now the main place to review the manager summary, recommendation, and recent ingested outcomes.
+
 ## Browser Task Actions
 
 - `queued`: use `Run Now` to start the task immediately, `Cancel` to stop it before it runs, or `Delete` to remove duplicates and test jobs.
@@ -56,6 +67,14 @@
 - `cancelled`: use `Duplicate` to recreate it, or `Delete` to remove it.
 
 These actions are intentionally state-aware. Invalid actions should be hidden in the UI and rejected cleanly if called directly.
+
+## Reading Project Manager Recommendations
+
+- `request_manual_test` means AI Telescreen thinks a human should verify the recent change before another coding pass.
+- `launch_followup_job` means the manager sees a likely next coding step, but it leaves enqueueing that work to the operator.
+- `wait_for_operator` means the project should pause for review, clarification, or an environment/config fix.
+- `mark_complete` means recent work looks stable enough that the current project phase may be done.
+- The recommendation is guidance, not automation. You stay in control of whether a new job is launched.
 
 ## Diagnostics
 
