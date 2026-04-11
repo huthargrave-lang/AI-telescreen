@@ -1,6 +1,8 @@
 <section class="panel">
   <h2 style="margin-top:0;">Overview</h2>
   <p><strong>Status:</strong> <span class="status-{{ job.status.value }}">{{ job.status.value }}</span></p>
+  <p><strong>What this means:</strong> {{ job_lifecycle.headline }}</p>
+  <p class="meta">{{ job_lifecycle.helper_text }}</p>
   <p><strong>Provider:</strong> {{ job.provider }}</p>
   <p><strong>Backend:</strong> {{ job.backend }}</p>
   <p><strong>Model:</strong> {{ job.model or "n/a" }}</p>
@@ -12,6 +14,9 @@
   <p><strong>Base branch:</strong> {{ job.metadata.get("base_branch") or "n/a" }}</p>
   <p><strong>Cleanup policy:</strong> {{ job.metadata.get("cleanup_policy") or "none" }}</p>
   <p><strong>Integration status:</strong> {{ integration.status }}</p>
+  {% if integration.status == "local-only" %}
+    <p class="meta">This task looks local-only right now. No project or user integration config was discovered for this workspace.</p>
+  {% endif %}
   <p><strong>Created:</strong> {{ job.created_at.isoformat() }}</p>
   <p><strong>Updated:</strong> {{ job.updated_at.isoformat() }}</p>
   <p><strong>Next retry:</strong> {{ job.next_retry_at.isoformat() if job.next_retry_at else "n/a" }}</p>

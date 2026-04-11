@@ -7,6 +7,9 @@
     {{ integration.backend_support.effective_mode }}
     (project_mcp={{ integration.backend_support.supports_project_mcp }}, user_mcp={{ integration.backend_support.supports_user_mcp }})
   </p>
+  {% if integration.status == "local-only" %}
+    <p class="meta">No external project or user integrations were discovered for this task, so it is expected to behave as a local-only job.</p>
+  {% endif %}
   {% if integration.summary %}
     <p><strong>Workspace path:</strong> {{ integration.summary.workspace_path }}</p>
     <p><strong>Repo path:</strong> {{ integration.summary.repo_path or "n/a" }}</p>

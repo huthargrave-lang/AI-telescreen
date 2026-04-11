@@ -5,7 +5,7 @@
     <div>
       <a href="/">← Back</a>
       <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">New Job</h1>
-      <p class="subtitle">Launch Codex or Claude work from the browser using the same orchestration service used by the CLI.</p>
+      <p class="subtitle">Create a new task from the browser using the same orchestration service that powers the CLI and worker.</p>
     </div>
     <div class="toolbar">
       <a class="pill" href="/projects">Projects</a>
@@ -78,8 +78,8 @@
       </label>
       {% if selected_project %}
         <div class="full meta">
-          Prefilled from project <a href="/projects/{{ selected_project.id }}">{{ selected_project.name }}</a>.
-          New jobs from this form stay associated with that project for recent-launch history.
+          Using defaults from project <a href="/projects/{{ selected_project.id }}">{{ selected_project.name }}</a>.
+          Repo path, backend, provider, branch, and workspace settings were prefilled from that project where available.
         </div>
       {% endif %}
       <div class="full toolbar">

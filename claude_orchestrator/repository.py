@@ -675,6 +675,8 @@ class JobRepository:
 
     def request_cancel(self, job_id: str, reason: str = "cancelled_by_operator") -> Job:
         job = self.get_job(job_id)
+        if job.status not in {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.WAITING_RETRY, JobStatus.FAILED}:
+            raise ValueError(f"Job {job_id} cannot be cancelled from status {job.status.value}")
         now = utcnow()
         updated_metadata = dict(job.metadata)
         for key in ("followup_type", "followup_reason", "followup_requested_at", "resume_hint"):
@@ -724,9 +726,18 @@ class JobRepository:
                         to_iso8601(now),
                         "job_cancelled",
                         _dumps({"reason": reason}),
-                    ),
-                )
+                ),
+            )
         return self.get_job(job_id)
+
+    def delete_job(self, job_id: str) -> Job:
+        job = self.get_job(job_id)
+        with self.db.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            deleted = connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        if deleted.rowcount != 1:
+            raise KeyError(f"Unknown job: {job_id}")
+        return job
 
     def manual_retry(self, job_id: str) -> Job:
         job = self.get_job(job_id)

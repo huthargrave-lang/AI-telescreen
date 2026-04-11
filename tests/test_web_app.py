@@ -7,7 +7,7 @@ import pytest
 
 from claude_orchestrator.bootstrap import bootstrap
 from claude_orchestrator.diagnostics import BackendSmokeTestResult, DiagnosticCheck, DiagnosticsReport
-from claude_orchestrator.models import JobStatus
+from claude_orchestrator.models import EnqueueJobRequest, JobStatus
 from claude_orchestrator.services.orchestrator import OrchestratorService
 from claude_orchestrator.web.app import build_app
 
@@ -31,7 +31,7 @@ def test_web_app_loads_templates_outside_repo_root(tmp_path, monkeypatch):
     assert "AI Telescreen" in dashboard.text
     assert "Create Job" in dashboard.text
     assert "Doctor" in dashboard.text
-    assert "Process Due Jobs Once" in dashboard.text
+    assert "Run Queued Jobs Once" in dashboard.text
     assert status.status_code == 200
     assert "counts" in status.json()
 
@@ -88,6 +88,123 @@ def test_web_create_job_retry_cancel_and_duplicate_flow(tmp_path):
     assert "Create Job" in dashboard.text
 
 
+def test_web_job_actions_are_state_aware(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends=context.backends,
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    queued = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="queued"))
+    running = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="running"))
+    failed = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="failed"))
+    waiting_retry = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="retry later"))
+    completed = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="done"))
+    cancelled = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="cancelled"))
+
+    assert context.repository.claim_job(running.id, "worker-1", lease_seconds=30) is not None
+    failed_claim = context.repository.claim_job(failed.id, "worker-1", lease_seconds=30)
+    waiting_claim = context.repository.claim_job(waiting_retry.id, "worker-1", lease_seconds=30)
+    completed_claim = context.repository.claim_job(completed.id, "worker-1", lease_seconds=30)
+    assert failed_claim is not None and waiting_claim is not None and completed_claim is not None
+    context.repository.update_job_status(failed.id, target_status=JobStatus.FAILED, current_status=JobStatus.RUNNING)
+    context.repository.update_job_status(
+        waiting_retry.id,
+        target_status=JobStatus.WAITING_RETRY,
+        current_status=JobStatus.RUNNING,
+    )
+    context.repository.update_job_status(
+        completed.id,
+        target_status=JobStatus.COMPLETED,
+        current_status=JobStatus.RUNNING,
+    )
+    orchestrator.cancel(cancelled.id)
+
+    queued_page = client.get(f"/jobs/{queued.id}")
+    running_page = client.get(f"/jobs/{running.id}")
+    failed_page = client.get(f"/jobs/{failed.id}")
+    waiting_page = client.get(f"/jobs/{waiting_retry.id}")
+    completed_page = client.get(f"/jobs/{completed.id}")
+    cancelled_page = client.get(f"/jobs/{cancelled.id}")
+    jobs_partial = client.get("/partials/jobs")
+
+    assert '>Run Now<' in queued_page.text
+    assert '>Cancel<' in queued_page.text
+    assert '>Delete<' in queued_page.text
+    assert '>Retry<' not in queued_page.text
+    assert f'/jobs/{queued.id}/run-now' in jobs_partial.text
+    assert f'/jobs/{queued.id}/retry' not in jobs_partial.text
+
+    assert '>Cancel<' in running_page.text
+    assert '>Delete<' not in running_page.text
+    assert '>Run Now<' not in running_page.text
+
+    assert '>Retry<' in failed_page.text
+    assert '>Delete<' in failed_page.text
+
+    assert '>Retry Now<' in waiting_page.text
+    assert '>Delete<' in waiting_page.text
+    assert '>Cancel<' in waiting_page.text
+
+    assert '>Duplicate<' in completed_page.text
+    assert '>Delete<' in completed_page.text
+    assert '>Cancel<' not in completed_page.text
+
+    assert '>Delete<' in cancelled_page.text
+    assert '>Duplicate<' in cancelled_page.text
+
+
+def test_web_invalid_actions_fail_cleanly_and_delete_works(tmp_path, monkeypatch):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends=context.backends,
+    )
+
+    async def fake_process_claimed_job(self, job, worker_id):
+        self.repository.update_job_status(job.id, target_status=JobStatus.COMPLETED, current_status=JobStatus.RUNNING)
+        return self.repository.get_job(job.id)
+
+    monkeypatch.setattr(OrchestratorService, "process_claimed_job", fake_process_claimed_job)
+
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    queued = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="queued"))
+    running = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="running"))
+    failed = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="failed"))
+    assert context.repository.claim_job(running.id, "worker-1", lease_seconds=30) is not None
+    failed_claim = context.repository.claim_job(failed.id, "worker-1", lease_seconds=30)
+    assert failed_claim is not None
+    context.repository.update_job_status(failed.id, target_status=JobStatus.FAILED, current_status=JobStatus.RUNNING)
+
+    invalid_retry = client.post(f"/jobs/{queued.id}/retry", follow_redirects=False)
+    invalid_delete = client.post(f"/jobs/{running.id}/delete", follow_redirects=False)
+    cancel_queued = client.post(f"/jobs/{queued.id}/cancel", follow_redirects=False)
+    delete_failed = client.post(f"/jobs/{failed.id}/delete", follow_redirects=False)
+
+    run_now_job = orchestrator.enqueue(EnqueueJobRequest(backend="messages_api", task_type="code", prompt="run now"))
+    run_now = client.post(f"/jobs/{run_now_job.id}/run-now", follow_redirects=False)
+
+    assert invalid_retry.status_code == 303
+    assert "error=" in invalid_retry.headers["location"]
+    assert invalid_delete.status_code == 303
+    assert "error=" in invalid_delete.headers["location"]
+    assert cancel_queued.status_code == 303
+    assert context.repository.get_job(queued.id).status == JobStatus.CANCELLED
+    assert delete_failed.status_code == 303
+    with pytest.raises(KeyError):
+        context.repository.get_job(failed.id)
+    assert run_now.status_code == 303
+    assert context.repository.get_job(run_now_job.id).status == JobStatus.COMPLETED
+
+
 def test_web_projects_create_launch_and_prefill(tmp_path):
     context = bootstrap(tmp_path)
     app = build_app(root=tmp_path)
@@ -121,7 +238,7 @@ def test_web_projects_create_launch_and_prefill(tmp_path):
     assert created_project.status_code == 303
     assert 'value="messages_api"' in new_job_page.text
     assert f'value="{tmp_path.resolve()}"' in new_job_page.text
-    assert "Prefilled from project" in new_job_page.text
+    assert "Using defaults from project" in new_job_page.text
     assert launch.status_code == 303
     assert launched_job.metadata["project_id"] == project_id
     assert launched_job.metadata["repo_path"] == str(tmp_path.resolve())

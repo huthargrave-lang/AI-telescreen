@@ -5,7 +5,7 @@
     <div>
       <h1 class="title">AI Telescreen</h1>
       <p class="subtitle">
-        Local-first coding-agent control for Anthropic and OpenAI workflows, with durable retries, workspace visibility, and explicit integration awareness.
+        Launch, monitor, retry, cancel, and clean up coding tasks from one browser-first cockpit.
       </p>
     </div>
     <div class="toolbar">
@@ -31,7 +31,7 @@
       <div class="split">
         <div>
           <h2 style="margin:0;">Projects</h2>
-          <div class="meta">Saved repos, edit-ready defaults, and recent launch entry points for browser-first job creation.</div>
+          <div class="meta">Projects are saved repositories with launch defaults. Use them as repeatable starting points for new tasks.</div>
         </div>
         <div class="toolbar">
           <a class="pill" href="/projects">Open Projects</a>
@@ -74,20 +74,20 @@
           </tbody>
         </table>
       {% else %}
-        <p class="meta" style="margin-top: 12px;">No saved projects yet. Add a project to prefill repo, backend, and worktree defaults.</p>
+        <p class="meta" style="margin-top: 12px;">No saved projects yet. Add one to reuse repo, backend, branch, and workspace defaults when launching tasks.</p>
       {% endif %}
     </section>
 
     <section class="panel">
-      <h2 style="margin-top:0;">Worker</h2>
-      <p class="meta">Continuous processing still works best from `claude-orchestrator run-worker`, but you can trigger a one-pass processing cycle from the browser.</p>
+      <h2 style="margin-top:0;">Queue Control</h2>
+      <p class="meta">Queued jobs are waiting to start. You can start one job directly with Run Now, or run one browser-triggered pass over the queue here.</p>
       <div class="meta-list" style="margin-bottom: 12px;">
         <div>Running jobs: {{ worker_panel.running_jobs }}</div>
         <div>Queued jobs: {{ worker_panel.queued_jobs }}</div>
         <div>Waiting retry: {{ worker_panel.waiting_retry_jobs }}</div>
       </div>
       <form method="post" action="/worker/run-once?next=/">
-        <button type="submit">Process Due Jobs Once</button>
+        <button type="submit">Run Queued Jobs Once</button>
       </form>
       <div class="toolbar" style="margin-top: 12px;">
         <a class="pill" href="/doctor">Open Doctor</a>
@@ -99,7 +99,7 @@
     <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom: 12px;">
       <div>
         <h2 style="margin:0;">Jobs</h2>
-        <div class="meta">Anthropic and OpenAI jobs side by side, with provider, backend, workspace, integration, and retry visibility.</div>
+        <div class="meta">Queued jobs have not started yet. Use Run Now to start one immediately, Cancel to stop it before it runs, and Delete to remove accidental test or duplicate jobs.</div>
       </div>
       <a class="pill" href="/jobs/new">Create Job</a>
     </div>

@@ -8,17 +8,39 @@
       <p class="subtitle">
         Provider {{ job.provider }} · backend {{ job.backend }} · task {{ job.task_type }} · attempts {{ job.attempt_count }}/{{ job.max_attempts }}
       </p>
+      <p class="meta">{{ job_lifecycle.helper_text }}</p>
     </div>
     <div class="actions">
-      <form method="post" action="/jobs/{{ job.id }}/retry">
-        <button type="submit">Retry</button>
-      </form>
-      <form method="post" action="/jobs/{{ job.id }}/cancel">
-        <button type="submit" class="secondary">Cancel</button>
-      </form>
-      <form method="post" action="/jobs/{{ job.id }}/duplicate">
-        <button type="submit" class="ghost">Duplicate</button>
-      </form>
+      {% if job_actions.run_now %}
+        <form method="post" action="/jobs/{{ job.id }}/run-now?next=/jobs/{{ job.id }}">
+          <button type="submit">Run Now</button>
+        </form>
+      {% endif %}
+      {% if job_actions.retry_now %}
+        <form method="post" action="/jobs/{{ job.id }}/retry-now?next=/jobs/{{ job.id }}">
+          <button type="submit">Retry Now</button>
+        </form>
+      {% endif %}
+      {% if job_actions.retry %}
+        <form method="post" action="/jobs/{{ job.id }}/retry?next=/jobs/{{ job.id }}">
+          <button type="submit">Retry</button>
+        </form>
+      {% endif %}
+      {% if job_actions.cancel %}
+        <form method="post" action="/jobs/{{ job.id }}/cancel?next=/jobs/{{ job.id }}">
+          <button type="submit" class="secondary">Cancel</button>
+        </form>
+      {% endif %}
+      {% if job_actions.duplicate %}
+        <form method="post" action="/jobs/{{ job.id }}/duplicate?next=/jobs/{{ job.id }}">
+          <button type="submit" class="ghost">Duplicate</button>
+        </form>
+      {% endif %}
+      {% if job_actions.delete %}
+        <form method="post" action="/jobs/{{ job.id }}/delete?next={% if job.metadata.get('project_id') %}/projects/{{ job.metadata.get('project_id') }}{% else %}/{% endif %}">
+          <button type="submit" class="danger">Delete</button>
+        </form>
+      {% endif %}
       <a class="pill" href="/jobs/new?from_job={{ job.id }}">Re-run / Edit</a>
       {% if job.metadata.get("project_id") %}
         <a class="pill" href="/projects/{{ job.metadata.get('project_id') }}">Project</a>
@@ -66,7 +88,7 @@
         </article>
       {% endfor %}
     {% else %}
-      <p class="meta">No runs recorded yet.</p>
+      <p class="meta">No runs have been recorded yet. Queued jobs will stay here until you run them from the browser or a worker picks them up.</p>
     {% endif %}
   </section>
 
@@ -92,7 +114,7 @@
         </tbody>
       </table>
     {% else %}
-      <p class="meta">No scheduler events recorded yet.</p>
+      <p class="meta">No scheduler events recorded yet. Fresh queued jobs will usually show only minimal activity until they start running.</p>
     {% endif %}
   </section>
 

@@ -38,7 +38,14 @@ from ..providers import infer_provider, validate_provider_backend
 from ..repository import JobRepository
 from ..retry import ConfigurationError, RetryPolicy, RetryableBackendError, UserCancelledError
 from ..timeutils import utcnow
-from ..workspaces import cleanup_job_workspace, prepare_job_workspace, resolve_job_prompt, store_private_prompt, store_response_artifact
+from ..workspaces import (
+    cleanup_job_workspace,
+    delete_job_workspace,
+    prepare_job_workspace,
+    resolve_job_prompt,
+    store_private_prompt,
+    store_response_artifact,
+)
 from ..backends.base import BackendAdapter, BatchCapableBackend, BackendContext
 
 logger = logging.getLogger(__name__)
@@ -57,6 +64,21 @@ class JobInspection:
     artifacts: List[ArtifactRecord]
     integration_summary: Optional[WorkspaceIntegrationSummary]
     backend_integration_support: Dict[str, Any]
+
+
+@dataclass
+class JobDeletionResult:
+    job_id: str
+    deleted_status: str
+    workspace_cleaned: bool
+    workspace_cleanup_reason: str
+
+
+@dataclass
+class JobLifecycleSummary:
+    status: str
+    headline: str
+    helper_text: str
 
 
 class LeaseHeartbeat:
@@ -379,6 +401,124 @@ class OrchestratorService:
                 model=original.model,
                 privacy_mode=bool(original.metadata.get("prompt_artifact_path")),
             )
+        )
+
+    def describe_job_actions(self, job: Job) -> Dict[str, Any]:
+        status = job.status
+        return {
+            "open": True,
+            "run_now": status == JobStatus.QUEUED,
+            "cancel": status in {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.WAITING_RETRY},
+            "retry": status == JobStatus.FAILED,
+            "retry_now": status == JobStatus.WAITING_RETRY,
+            "duplicate": status in {JobStatus.FAILED, JobStatus.COMPLETED, JobStatus.CANCELLED},
+            "delete": status in {
+                JobStatus.QUEUED,
+                JobStatus.FAILED,
+                JobStatus.WAITING_RETRY,
+                JobStatus.COMPLETED,
+                JobStatus.CANCELLED,
+            },
+            "delete_disabled_reason": (
+                "Running jobs cannot be deleted while work is in progress."
+                if status == JobStatus.RUNNING
+                else None
+            ),
+        }
+
+    def describe_job_lifecycle(self, job: Job) -> JobLifecycleSummary:
+        if job.status == JobStatus.QUEUED:
+            return JobLifecycleSummary(
+                status=job.status.value,
+                headline="Queued and waiting to start",
+                helper_text=(
+                    "This task has not started yet. Use Run Now to start it from the browser, "
+                    "Cancel to remove it from the queue, or Delete to permanently remove accidental test jobs."
+                ),
+            )
+        if job.status == JobStatus.RUNNING:
+            return JobLifecycleSummary(
+                status=job.status.value,
+                headline="Running now",
+                helper_text=(
+                    "A worker is actively processing this task. Cancel asks the worker to stop and record a safe interruption."
+                ),
+            )
+        if job.status == JobStatus.WAITING_RETRY:
+            return JobLifecycleSummary(
+                status=job.status.value,
+                headline="Waiting for another attempt",
+                helper_text=(
+                    "This task hit a retryable problem. Retry Now starts the next attempt immediately, "
+                    "or Cancel/Delete if you do not want it to run again."
+                ),
+            )
+        if job.status == JobStatus.FAILED:
+            return JobLifecycleSummary(
+                status=job.status.value,
+                headline="Stopped with an error",
+                helper_text=(
+                    "This task ended in a permanent failure or ran out of attempts. Retry re-queues it, "
+                    "Duplicate copies it into a fresh task, and Delete removes this record."
+                ),
+            )
+        if job.status == JobStatus.COMPLETED:
+            return JobLifecycleSummary(
+                status=job.status.value,
+                headline="Completed successfully",
+                helper_text=(
+                    "This task finished. Duplicate creates a fresh queued copy, and Delete removes completed test or throwaway jobs."
+                ),
+            )
+        return JobLifecycleSummary(
+            status=job.status.value,
+            headline="Cancelled",
+            helper_text=(
+                "This task was cancelled before or during execution. Delete removes it permanently, and Duplicate creates a new queued copy."
+            ),
+        )
+
+    def claim_job_for_run_now(self, job_id: str, *, worker_id: str) -> Job:
+        job = self.repository.get_job(job_id)
+        if job.status != JobStatus.QUEUED:
+            raise ValueError(f"Job {job_id} must be queued before it can run now; current status is {job.status.value}.")
+        claimed = self.repository.claim_job(
+            job_id,
+            worker_id,
+            lease_seconds=self.config.effective_lease_seconds(),
+        )
+        if claimed is None:
+            current = self.repository.get_job(job_id)
+            raise ValueError(f"Job {job_id} could not be started because it is now {current.status.value}.")
+        self.repository.add_scheduler_event(
+            job_id,
+            "job_run_now_requested",
+            {"worker_id": worker_id},
+        )
+        return claimed
+
+    async def run_job_now(self, job_id: str, *, worker_id: str) -> Job:
+        claimed = self.claim_job_for_run_now(job_id, worker_id=worker_id)
+        return await self.process_claimed_job(claimed, worker_id)
+
+    def retry_job_now(self, job_id: str, *, worker_id: str) -> Job:
+        retried = self.retry_job(job_id)
+        return self.claim_job_for_run_now(retried.id, worker_id=worker_id)
+
+    def delete_job(self, job_id: str) -> JobDeletionResult:
+        job = self.repository.get_job(job_id)
+        if job.status == JobStatus.RUNNING:
+            raise ValueError("Running jobs cannot be deleted while work is in progress.")
+        cleanup_result = delete_job_workspace(
+            self.config.workspace_path(self.root),
+            job.metadata,
+        )
+        deleted = self.repository.delete_job(job_id)
+        return JobDeletionResult(
+            job_id=deleted.id,
+            deleted_status=deleted.status.value,
+            workspace_cleaned=cleanup_result.cleaned,
+            workspace_cleanup_reason=cleanup_result.reason,
         )
 
     def list_project_jobs(self, project_id: str, *, limit: int = 20) -> List[Job]:

@@ -34,8 +34,8 @@
 - Use saved projects to prefill repo, backend, provider, base branch, and worktree defaults.
 - Use the project edit page to adjust defaults without recreating the project.
 - Use the doctor page for browser-based backend and environment diagnostics.
-- Job detail pages support retry, cancel, duplicate, and re-run/edit flows.
-- The browser also exposes a lightweight `Process Due Jobs Once` control for ad hoc worker passes.
+- Job detail pages now expose state-aware actions such as Run Now, Retry, Retry Now, Cancel, Duplicate, and Delete.
+- The browser also exposes a lightweight `Run Queued Jobs Once` control for an ad hoc queue pass when you want to kick work forward without opening a terminal.
 - Continuous background processing still works best with `claude-orchestrator run-worker`.
 
 ## Saved Projects
@@ -44,6 +44,18 @@
 - A project captures `name`, `repo_path`, default backend/provider, default base branch, default worktree preference, and notes.
 - Launching from a project preserves those defaults while still using the same orchestration service path as CLI-created jobs.
 - Project detail pages now show recent launches tied back to that project via a durable `project_id` job link.
+- Projects are saved launch defaults, not active tasks themselves.
+
+## Browser Task Actions
+
+- `queued`: use `Run Now` to start the task immediately, `Cancel` to stop it before it runs, or `Delete` to remove duplicates and test jobs.
+- `running`: use `Cancel` to request a safe stop.
+- `waiting_retry`: use `Retry Now` to start the next attempt immediately, or `Cancel` / `Delete` if you no longer want it.
+- `failed`: use `Retry` to re-queue it, `Duplicate` to spin up a fresh copy, or `Delete` to clean it up.
+- `completed`: use `Duplicate` when you want to run the same task again, or `Delete` for cleanup.
+- `cancelled`: use `Duplicate` to recreate it, or `Delete` to remove it.
+
+These actions are intentionally state-aware. Invalid actions should be hidden in the UI and rejected cleanly if called directly.
 
 ## Diagnostics
 
@@ -82,6 +94,10 @@
 
 - Why is the job paused?
   Look at `inspect JOB_ID`, `inspect JOB_ID --json`, or the most recent `scheduler_events` entry.
+- How do I start a queued job right now?
+  Use `Run Now` on the dashboard or job detail page, or use `Run Queued Jobs Once` if you want a one-pass browser-triggered queue sweep.
+- How do I clean up accidental test jobs or duplicates?
+  Use `Delete` on queued, failed, cancelled, waiting-retry, or completed jobs.
 - Is Codex callable and plausibly authenticated from this machine?
   Open `/doctor` or run `claude-orchestrator smoke-test codex_cli`.
 - Is this job local-only or integration-enabled?

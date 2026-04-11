@@ -183,6 +183,54 @@ def cleanup_job_workspace(
     )
 
 
+def delete_job_workspace(
+    workspace_root: Path,
+    metadata: Optional[dict[str, Any]],
+) -> WorkspaceCleanupResult:
+    """Best-effort cleanup for job deletion, ignoring cleanup_policy but preserving safety checks."""
+
+    values = dict(metadata or {})
+    workspace_kind = str(values.get("workspace_kind") or "directory")
+    workspace_path_value = values.get("workspace_path")
+    if not workspace_path_value:
+        return WorkspaceCleanupResult(cleaned=False, reason="missing_workspace_path", workspace_kind=workspace_kind)
+
+    workspace_path = ensure_within_root(workspace_root, Path(str(workspace_path_value)))
+    if not _is_app_created_workspace(workspace_path, values):
+        return WorkspaceCleanupResult(cleaned=False, reason="workspace_not_app_created", workspace_kind=workspace_kind)
+
+    if workspace_kind == "git_worktree":
+        repo_path_value = values.get("repo_path")
+        if not repo_path_value:
+            return WorkspaceCleanupResult(cleaned=False, reason="missing_repo_path", workspace_kind=workspace_kind)
+        repo_path = Path(str(repo_path_value)).expanduser().resolve()
+        if workspace_path.exists() and _git_is_dirty(workspace_path):
+            return WorkspaceCleanupResult(cleaned=False, reason="workspace_dirty", workspace_kind=workspace_kind)
+        if workspace_path.exists():
+            _git(["worktree", "remove", "--force", str(workspace_path)], cwd=repo_path)
+        parent = workspace_path.parent
+        if parent.exists() and parent != workspace_root.resolve():
+            try:
+                parent.rmdir()
+            except OSError:
+                pass
+        return WorkspaceCleanupResult(
+            cleaned=True,
+            reason="worktree_removed",
+            workspace_kind=workspace_kind,
+            cleaned_path=workspace_path,
+        )
+
+    if workspace_path.exists():
+        shutil.rmtree(workspace_path)
+    return WorkspaceCleanupResult(
+        cleaned=True,
+        reason="workspace_removed",
+        workspace_kind=workspace_kind,
+        cleaned_path=workspace_path,
+    )
+
+
 def store_private_prompt(workspace: Path, prompt: str, artifact_dir: str) -> Path:
     """Persist a prompt outside SQLite when privacy mode is enabled."""
 

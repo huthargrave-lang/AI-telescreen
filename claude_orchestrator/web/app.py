@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Optional
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ..bootstrap import bootstrap
 from ..models import EnqueueJobRequest
@@ -16,10 +16,11 @@ from ..services.worker import WorkerService
 from ..workspaces import resolve_job_prompt
 
 try:  # pragma: no cover - optional dependency in the sandbox.
-    from fastapi import FastAPI, Request
+    from fastapi import BackgroundTasks, FastAPI, Request
     from fastapi.responses import HTMLResponse, RedirectResponse
     from fastapi.templating import Jinja2Templates
 except ImportError:  # pragma: no cover - keeps module importable in tests.
+    BackgroundTasks = object  # type: ignore[assignment]
     FastAPI = None  # type: ignore[assignment]
     Request = object  # type: ignore[assignment]
     HTMLResponse = object  # type: ignore[assignment]
@@ -82,9 +83,13 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
 
     def _job_detail_context(request: Request, job_id: str) -> dict:
         details = orchestrator.inspect(job_id)
+        lifecycle = orchestrator.describe_job_lifecycle(details.job)
         return {
             "request": request,
             "job": details.job,
+            "job_serialized": serialize_job(details.job),
+            "job_actions": orchestrator.describe_job_actions(details.job),
+            "job_lifecycle": lifecycle,
             "state": details.state,
             "runs": details.runs,
             "events": details.events,
@@ -180,6 +185,23 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     def _redirect_target(request: Request, default: str) -> str:
         return request.query_params.get("next") or default
 
+    def _redirect_with_feedback(
+        request: Request,
+        default: str,
+        *,
+        notice: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> RedirectResponse:
+        target = _redirect_target(request, default)
+        split = urlsplit(target)
+        query = dict(parse_qsl(split.query, keep_blank_values=True))
+        if notice:
+            query["notice"] = notice
+        if error:
+            query["error"] = error
+        url = urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
+        return RedirectResponse(url=url, status_code=303)
+
     async def _parse_form_values(request: Request) -> dict[str, str]:
         body = (await request.body()).decode("utf-8")
         parsed = parse_qs(body, keep_blank_values=True)
@@ -228,7 +250,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return {
             "request": request,
             "counts": counts,
-            "jobs": jobs,
+            "jobs": [serialize_job(job) for job in jobs],
             "projects": orchestrator.list_saved_projects(),
             "refresh_seconds": orchestrator.config.ui.refresh_seconds,
             "filters": {"status": status, "provider": provider, "backend": backend},
@@ -244,6 +266,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     def serialize_job(job) -> dict:
         latest_stream_event, latest_phase, latest_progress = _stream_snapshot(job.id)
         integration_snapshot = job.metadata.get("integration_summary") or {}
+        lifecycle = orchestrator.describe_job_lifecycle(job)
         return {
             "id": job.id,
             "status": job.status.value,
@@ -277,6 +300,11 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "config_paths": integration_snapshot.get("config_paths", []),
             },
             "metadata": job.metadata,
+            "actions": orchestrator.describe_job_actions(job),
+            "lifecycle": {
+                "headline": lifecycle.headline,
+                "helper_text": lifecycle.helper_text,
+            },
         }
 
     def serialize_project_integration(summary) -> dict:
@@ -667,21 +695,85 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     async def worker_run_once(request: Request):
         worker = WorkerService(orchestrator.repository, orchestrator)
         await worker.run_forever(run_once=True)
-        return RedirectResponse(url=_redirect_target(request, "/"), status_code=303)
+        return _redirect_with_feedback(
+            request,
+            "/",
+            notice="Ran one queue-processing pass. Queued jobs that could start have been picked up.",
+        )
+
+    @app.post("/jobs/{job_id}/run-now")
+    async def run_job_now(request: Request, job_id: str, background_tasks: BackgroundTasks):
+        worker_id = f"web-run-now-{job_id[:8]}"
+        try:
+            claimed = orchestrator.claim_job_for_run_now(job_id, worker_id=worker_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/jobs/{job_id}", error=str(exc))
+        background_tasks.add_task(orchestrator.process_claimed_job, claimed, worker_id)
+        return _redirect_with_feedback(
+            request,
+            f"/jobs/{job_id}",
+            notice="Job was moved out of the queue and started immediately.",
+        )
 
     @app.post("/jobs/{job_id}/retry")
     async def retry_job(request: Request, job_id: str):
-        orchestrator.retry_job(job_id)
-        return RedirectResponse(url=_redirect_target(request, f"/jobs/{job_id}"), status_code=303)
+        try:
+            job = orchestrator.retry_job(job_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/jobs/{job_id}", error=str(exc))
+        return _redirect_with_feedback(
+            request,
+            f"/jobs/{job.id}",
+            notice="Job was re-queued. Use Run Now if you want to start it immediately.",
+        )
+
+    @app.post("/jobs/{job_id}/retry-now")
+    async def retry_job_now(request: Request, job_id: str, background_tasks: BackgroundTasks):
+        worker_id = f"web-retry-now-{job_id[:8]}"
+        try:
+            claimed = orchestrator.retry_job_now(job_id, worker_id=worker_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/jobs/{job_id}", error=str(exc))
+        background_tasks.add_task(orchestrator.process_claimed_job, claimed, worker_id)
+        return _redirect_with_feedback(
+            request,
+            f"/jobs/{job_id}",
+            notice="Job was retried immediately.",
+        )
 
     @app.post("/jobs/{job_id}/cancel")
     async def cancel_job(request: Request, job_id: str):
-        orchestrator.cancel(job_id)
-        return RedirectResponse(url=_redirect_target(request, f"/jobs/{job_id}"), status_code=303)
+        try:
+            job = orchestrator.cancel(job_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/jobs/{job_id}", error=str(exc))
+        return _redirect_with_feedback(
+            request,
+            f"/jobs/{job.id}",
+            notice="Job was cancelled.",
+        )
 
     @app.post("/jobs/{job_id}/duplicate")
     async def duplicate_job(request: Request, job_id: str):
-        job = orchestrator.duplicate_job(job_id)
-        return RedirectResponse(url=_redirect_target(request, f"/jobs/{job.id}"), status_code=303)
+        try:
+            job = orchestrator.duplicate_job(job_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/jobs/{job_id}", error=str(exc))
+        return _redirect_with_feedback(
+            request,
+            f"/jobs/{job.id}",
+            notice="Created a duplicate queued job.",
+        )
+
+    @app.post("/jobs/{job_id}/delete")
+    async def delete_job(request: Request, job_id: str):
+        try:
+            deleted = orchestrator.delete_job(job_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/jobs/{job_id}", error=str(exc))
+        notice = "Job was deleted."
+        if not deleted.workspace_cleaned:
+            notice = f"Job was deleted. Workspace cleanup was skipped: {deleted.workspace_cleanup_reason}."
+        return _redirect_with_feedback(request, "/", notice=notice)
 
     return app

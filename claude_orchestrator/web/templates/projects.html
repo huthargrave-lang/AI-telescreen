@@ -5,7 +5,7 @@
     <div>
       <a href="/">← Back</a>
       <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">Projects</h1>
-      <p class="subtitle">Saved repositories act as launch targets with default backend, provider, branch, and worktree settings.</p>
+      <p class="subtitle">Projects are saved repositories with task-launch defaults. They are templates and launch points, not active jobs.</p>
     </div>
     <div class="toolbar">
       <a class="pill" href="/projects/new">Add Project</a>
@@ -49,7 +49,7 @@
         </tbody>
       </table>
     {% else %}
-      <p class="meta">No projects saved yet.</p>
+      <p class="meta">No projects saved yet. Add one to make repeat launches faster and more consistent.</p>
     {% endif %}
   </section>
 {% endblock %}

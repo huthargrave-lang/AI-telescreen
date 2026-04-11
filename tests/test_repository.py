@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 
@@ -212,6 +213,41 @@ def test_launch_job_from_project_and_duplicate_job(tmp_path):
     assert duplicate.metadata["repo_path"] == str(tmp_path.resolve())
     assert repository.list_project_jobs(project.id, limit=10)[0].id == duplicate.id
     assert repository.get_job(duplicate.id).status == JobStatus.QUEUED
+
+
+def test_delete_job_removes_record_and_blocks_running_delete(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    queued = create_job(orchestrator, prompt="delete me")
+    deleted = orchestrator.delete_job(queued.id)
+
+    assert deleted.job_id == queued.id
+    try:
+        repository.get_job(queued.id)
+    except KeyError:
+        pass
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected deleted job to be removed from the repository.")
+
+    running = create_job(orchestrator, prompt="still running")
+    claimed = repository.claim_job(running.id, "worker-1")
+    assert claimed is not None
+
+    try:
+        orchestrator.delete_job(running.id)
+    except ValueError as exc:
+        assert "cannot be deleted" in str(exc).lower()
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected running job deletion to be blocked.")
+
+
+def test_run_job_now_claims_and_processes_queued_job(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    job = create_job(orchestrator, prompt="run now")
+
+    processed = asyncio.run(orchestrator.run_job_now(job.id, worker_id="worker-run-now"))
+
+    assert processed.status == JobStatus.COMPLETED
+    assert repository.get_job(job.id).status == JobStatus.COMPLETED
 
 
 def test_migration_adds_provider_columns_with_safe_defaults(tmp_path):

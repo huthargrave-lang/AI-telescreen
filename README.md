@@ -137,9 +137,10 @@ AI Telescreen is now web-first for normal operator control:
 - save projects with repo and launch defaults
 - edit saved projects from the browser
 - launch jobs from project pages
+- run queued jobs immediately from the browser
 - duplicate existing jobs
 - re-run jobs through a prefilled browser form
-- retry or cancel jobs from dashboard and detail views
+- retry, cancel, or delete jobs from dashboard and detail views
 - review recent project launch history from project detail pages
 
 Saved projects capture lightweight defaults such as:
@@ -152,6 +153,8 @@ Saved projects capture lightweight defaults such as:
 - `notes`
 
 Jobs launched from a saved project now persist `project_id` on the job record so project detail pages can show recent launches without depending on brittle metadata parsing.
+
+Projects are templates and launch points, not active tasks themselves. The active work always lives in jobs.
 
 ## Diagnostics and Doctor
 
@@ -204,6 +207,23 @@ Jobs always live in one of:
 - `cancelled`
 
 The durable worker uses SQLite-backed claiming to prevent duplicate execution, renews leases with background heartbeats while jobs are running, and drains in-flight work during graceful shutdown. On startup it scans expired `running` leases and moves those jobs into a recoverable state based on checkpoint availability.
+
+In the browser UI, the common task actions now line up with those states:
+
+- `queued`: `Run Now`, `Cancel`, or `Delete`
+- `running`: `Cancel`
+- `waiting_retry`: `Retry Now`, `Cancel`, or `Delete`
+- `failed`: `Retry`, `Duplicate`, or `Delete`
+- `completed`: `Duplicate` or `Delete`
+- `cancelled`: `Duplicate` or `Delete`
+
+Operator intent is:
+
+- `Run Now`: immediately claim a queued job and start it from the browser
+- `Retry`: re-queue a failed job so it can run again
+- `Retry Now`: re-queue a waiting-retry job and start the next attempt immediately
+- `Cancel`: stop queued work before it starts, or request a safe stop for running work
+- `Delete`: permanently remove the job record and its durable history; AI Telescreen also attempts a safe workspace cleanup when possible
 
 ## Retry Model
 
@@ -350,7 +370,7 @@ The dashboard is now the main cockpit for operator control. It shows:
 - a Doctor entry point for backend and environment diagnostics
 - saved projects with launch shortcuts
 - project editing and recent project launch history
-- a one-pass worker convenience control
+- a one-pass queue control for browser-triggered starts
 - recent jobs across Anthropic and OpenAI providers
 - provider/backend badges and workspace paths
 - compact integration status badges for local-only vs discovered project or user integrations
@@ -358,9 +378,10 @@ The dashboard is now the main cockpit for operator control. It shows:
 - integration detail panels with config paths, capability summaries, backend support, and parser notes
 - retry timing
 - last error summaries
+- state-aware actions such as Run Now, Retry, Cancel, Duplicate, and Delete
 - job detail pages with duplicate and re-run/edit actions
 - live progress panels for active codex_cli jobs
-- retry/cancel/duplicate actions from the browser
+- retry/cancel/delete/duplicate actions from the browser
 - JSON status endpoints at `/api/status`, `/api/jobs`, and `/api/jobs/{job_id}`
 - JSON stream endpoint at `/api/jobs/{job_id}/stream-events`
 - JSON diagnostics endpoint at `/api/doctor`
@@ -407,6 +428,7 @@ For subprocess-backed Codex jobs, cancellation also terminates the active child 
 
 - `codex_cli` remains a bounded subprocess backend in this pass rather than a full interactive session protocol.
 - The Codex smoke test is a short confidence check, not a guarantee that every downstream prompt, model choice, or network condition will behave the same way.
+- `Run Now` and `Retry Now` are intentionally lightweight browser helpers built on the same shared service logic as the worker. They are best for explicit operator-triggered starts, not as a replacement for a continuously running worker.
 - saved projects are intentionally lightweight; this pass does not add credentials, secret storage, or branch-management policy beyond existing local config and environment handling.
 - The current live activity model is polling-based and deliberately simple; it does not use websockets.
 - Workspace cleanup is intentionally conservative and defaults to `none`.
