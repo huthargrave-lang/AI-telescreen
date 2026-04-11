@@ -11,6 +11,7 @@ from ..models import (
     JobStatus,
     ProjectManagerDraftTask,
     ProjectManagerEvent,
+    ProjectManagerMessage,
     ProjectManagerRecommendation,
     ProjectManagerResponse,
     ProjectManagerSnapshot,
@@ -43,10 +44,14 @@ class ProjectManagerService:
         *,
         recent_event_limit: int = 5,
         retained_event_limit: int = 6,
+        recent_message_limit: int = 8,
+        retained_message_limit: int = 10,
     ) -> None:
         self.repository = repository
         self.recent_event_limit = recent_event_limit
         self.retained_event_limit = max(retained_event_limit, recent_event_limit)
+        self.recent_message_limit = recent_message_limit
+        self.retained_message_limit = max(retained_message_limit, recent_message_limit)
 
     def sync_project(self, project_id: str) -> ProjectManagerState:
         """Ensure manager state exists and reflects the latest saved-project defaults."""
@@ -64,7 +69,77 @@ class ProjectManagerService:
             project_id,
             limit=self.recent_event_limit,
         )
-        return ProjectManagerSnapshot(state=state, recent_events=recent_events)
+        recent_messages = list(
+            reversed(
+                self.repository.list_project_manager_messages(
+                    project_id,
+                    limit=self.recent_message_limit,
+                )
+            )
+        )
+        return ProjectManagerSnapshot(
+            state=state,
+            recent_events=recent_events,
+            recent_messages=recent_messages,
+        )
+
+    def submit_project_manager_message(
+        self,
+        project_id: str,
+        message: str,
+        *,
+        urgency: Optional[str] = None,
+        backend_preference: Optional[str] = None,
+        execution_mode: Optional[str] = None,
+    ) -> ProjectManagerSnapshot:
+        content = message.strip()
+        if not content:
+            raise ValueError("Project Manager message is required.")
+        self.repository.get_saved_project(project_id)
+        self._add_manager_message(
+            project_id,
+            role="operator",
+            content=content,
+            metadata={
+                "message_type": "ask",
+                "urgency": self._normalize_urgency(urgency),
+                "backend_preference": self._normalize_backend_preference(backend_preference),
+                "execution_mode": self._normalize_execution_mode_hint(execution_mode),
+            },
+        )
+        state = self._refresh_state(project_id)
+        response = state.latest_response
+        if response is not None:
+            self._add_manager_message(
+                project_id,
+                role="manager",
+                content=response.reason or (response.summary_bullets[0] if response.summary_bullets else ""),
+                metadata={
+                    "message_type": "response",
+                    "response": response.to_dict(),
+                    "display_snapshot": dict(state.display_snapshot),
+                    "decision": response.decision,
+                    "phase": response.phase,
+                    "confidence": response.confidence,
+                },
+            )
+        return self.get_snapshot(project_id)
+
+    def save_project_manager_advisory(self, project_id: str) -> ProjectManagerSnapshot:
+        state = self._refresh_state(project_id)
+        if state.latest_response is None:
+            raise ValueError("This project does not have a Project Manager response to save yet.")
+        self._add_manager_message(
+            project_id,
+            role="operator",
+            content="Saved the latest Project Manager guidance as advisory context.",
+            metadata={
+                "message_type": "advisory_save",
+                "decision": state.latest_response.decision,
+                "reason": state.latest_response.reason,
+            },
+        )
+        return self.get_snapshot(project_id)
 
     def ingest_job_outcome(
         self,
@@ -109,11 +184,13 @@ class ProjectManagerService:
             project_id,
             previous,
         )
+        recent_messages = self._compact_messages_if_needed(project_id)
         stable_project_facts = self._build_stable_project_facts(project, previous)
         latest_response = self._build_response(
             project,
             recent_events=recent_events,
             rolling_summary=rolling_summary,
+            recent_messages=recent_messages,
         )
         recommendation = ProjectManagerRecommendation.from_response(latest_response)
         current_phase = latest_response.phase
@@ -165,6 +242,36 @@ class ProjectManagerService:
             [event.id for event in older_events],
         )
         return events[: self.retained_event_limit], rolling_summary, rolling_facts, utcnow()
+
+    def _compact_messages_if_needed(self, project_id: str) -> List[ProjectManagerMessage]:
+        messages = self.repository.list_project_manager_messages(project_id, limit=None)
+        if len(messages) > self.retained_message_limit:
+            older_messages = messages[self.retained_message_limit :]
+            self.repository.delete_project_manager_messages(
+                project_id,
+                [message.id for message in older_messages],
+            )
+            messages = messages[: self.retained_message_limit]
+        return list(reversed(messages))
+
+    def _add_manager_message(
+        self,
+        project_id: str,
+        *,
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        message = ProjectManagerMessage(
+            id=str(uuid.uuid4()),
+            project_id=project_id,
+            role=role,
+            content=self._truncate(content, 1200) or "",
+            metadata=dict(metadata or {}),
+            created_at=utcnow(),
+        )
+        self.repository.add_project_manager_message(message)
+        self._compact_messages_if_needed(project_id)
 
     def _build_stable_project_facts(
         self,
@@ -334,6 +441,30 @@ class ProjectManagerService:
         return self._truncate(" ".join(parts), 420)
 
     def _build_response(
+        self,
+        project: SavedProject,
+        *,
+        recent_events: Sequence[ProjectManagerEvent],
+        rolling_summary: Optional[str],
+        recent_messages: Sequence[ProjectManagerMessage],
+    ) -> ProjectManagerResponse:
+        baseline = self._build_baseline_response(
+            project,
+            recent_events=recent_events,
+            rolling_summary=rolling_summary,
+        )
+        latest_request = self._latest_operator_request(recent_messages)
+        if latest_request is None:
+            return baseline
+        return self._build_message_response(
+            project,
+            baseline=baseline,
+            recent_events=recent_events,
+            rolling_summary=rolling_summary,
+            operator_request=latest_request,
+        )
+
+    def _build_baseline_response(
         self,
         project: SavedProject,
         *,
@@ -576,6 +707,186 @@ class ProjectManagerService:
             )
         )
 
+    def _build_message_response(
+        self,
+        project: SavedProject,
+        *,
+        baseline: ProjectManagerResponse,
+        recent_events: Sequence[ProjectManagerEvent],
+        rolling_summary: Optional[str],
+        operator_request: Dict[str, Optional[str]],
+    ) -> ProjectManagerResponse:
+        operator_message = str(operator_request.get("content") or "").strip()
+        lowered = operator_message.lower()
+        urgency = self._normalize_urgency(operator_request.get("urgency"))
+        backend_preference = self._normalize_backend_preference(operator_request.get("backend_preference"))
+        execution_mode_hint = self._normalize_execution_mode_hint(operator_request.get("execution_mode"))
+        latest_summary = recent_events[0].summary if recent_events else {}
+        summary_bullets = self._normalize_bullets(
+            [
+                f"Operator requested: {operator_message}",
+                *baseline.summary_bullets,
+            ],
+            limit=4,
+        )
+        recent_change_bullets = baseline.recent_change_bullets or self._recent_change_bullets(recent_events)
+        risks_or_blockers = list(baseline.risks_or_blockers)
+        if urgency in {"high", "critical"}:
+            risks_or_blockers.insert(0, f"The operator marked this request as {urgency}.")
+
+        explicit_plan = any(
+            token in lowered
+            for token in (
+                "what to do next",
+                "what should we do next",
+                "next step",
+                "plan",
+                "brainstorm",
+                "review the codebase",
+                "read-only",
+                "read only",
+                "audit",
+            )
+        )
+        explicit_debug = any(
+            token in lowered
+            for token in ("debug", "broken", "failure", "failing", "error", "regression", "fix")
+        )
+        explicit_polish = any(
+            token in lowered
+            for token in (
+                "polish",
+                "cleanup",
+                "wasted space",
+                "spacing",
+                "format",
+                "layout",
+                "copy",
+                "badge",
+                "tooltip",
+                "dense",
+                "compact",
+            )
+        )
+        explicit_implementation = any(
+            token in lowered
+            for token in ("implement", "add", "build", "wire", "connect", "launch", "create", "make")
+        )
+        urgent_only = (
+            urgency in {"high", "critical"}
+            and len(operator_message.split()) <= 6
+            and not any((explicit_plan, explicit_debug, explicit_polish, explicit_implementation))
+        )
+        execution_mode = execution_mode_hint or self._infer_execution_mode_from_request(
+            operator_message,
+            baseline,
+            latest_summary,
+        )
+        phase = self._phase_from_request(
+            baseline=baseline,
+            operator_message=operator_message,
+            explicit_plan=explicit_plan,
+            explicit_debug=explicit_debug,
+            explicit_polish=explicit_polish,
+        )
+        ui_layout_hint = self._layout_hint_for_phase(phase)
+        confidence = "high" if any((explicit_plan, explicit_debug, explicit_polish, explicit_implementation)) else "medium"
+        active_focus_bullets = self._build_active_focus_bullets(
+            operator_message=operator_message,
+            baseline=baseline,
+            execution_mode=execution_mode,
+            phase=phase,
+        )
+
+        if urgent_only and baseline.draft_task is None and baseline.decision != "launch_followup_job":
+            return self._normalize_response(
+                ProjectManagerResponse(
+                    phase="planning",
+                    summary_bullets=summary_bullets,
+                    recent_change_bullets=recent_change_bullets,
+                    active_focus_bullets=[
+                        "Turn the urgent request into a concrete scoped task before launching work.",
+                        "Keep the next pass grounded in one specific repo or UI outcome.",
+                    ],
+                    risks_or_blockers=self._normalize_bullets(
+                        risks_or_blockers
+                        + ["The request was marked urgent, but it still needs a clearer task scope."],
+                        limit=4,
+                    ),
+                    decision="needs_clarification",
+                    reason="The request is urgent, but it still needs one concrete focus before the manager should draft work.",
+                    draft_task=None,
+                    needs_manual_testing=False,
+                    manual_test_checklist=[],
+                    followup_questions=[
+                        "What is the single highest-priority outcome for the next pass?",
+                        "Should the next pass stay read-only, make safe UI changes, or do a full coding pass?",
+                    ],
+                    ui_layout_hint="planning",
+                    confidence="medium",
+                )
+            )
+
+        preferred_backend = self._preferred_backend(
+            project,
+            baseline=baseline,
+            latest_summary=latest_summary,
+            backend_preference=backend_preference,
+        )
+        preferred_provider = self._preferred_provider(project, baseline=baseline, latest_summary=latest_summary)
+        draft_task = self._build_operator_draft_task(
+            project,
+            baseline=baseline,
+            latest_summary=latest_summary,
+            operator_message=operator_message,
+            preferred_backend=preferred_backend,
+            preferred_provider=preferred_provider,
+            urgency=urgency,
+            execution_mode=execution_mode,
+        )
+
+        manual_test_checklist = baseline.manual_test_checklist if baseline.needs_manual_testing else []
+        if explicit_plan and execution_mode == "read_only":
+            reason = "The operator asked for a planning or audit pass, so the manager drafted a read-only next step."
+        elif explicit_debug:
+            reason = "The operator asked for a debugging-focused pass, so the manager drafted a targeted follow-up task."
+        elif explicit_polish:
+            reason = "The operator asked for a polish-focused pass, so the manager drafted a scoped cleanup task."
+        elif urgent_only:
+            reason = "The operator marked the current recommendation as urgent, so the manager raised its priority."
+        else:
+            reason = "The operator asked for a concrete next step, so the manager drafted an advisory task instead of auto-launching it."
+
+        if baseline.needs_manual_testing:
+            manual_test_checklist = self._normalize_bullets(
+                list(baseline.manual_test_checklist)
+                + ["Keep the follow-up scoped so the pending manual verification stays easy to run."],
+                limit=6,
+            )
+            risks_or_blockers = self._normalize_bullets(
+                risks_or_blockers
+                + ["Recent browser-facing work still has a pending manual verification ask."],
+                limit=4,
+            )
+
+        return self._normalize_response(
+            ProjectManagerResponse(
+                phase=phase,
+                summary_bullets=summary_bullets,
+                recent_change_bullets=recent_change_bullets,
+                active_focus_bullets=active_focus_bullets,
+                risks_or_blockers=risks_or_blockers,
+                decision="launch_followup_job",
+                reason=reason,
+                draft_task=draft_task,
+                needs_manual_testing=baseline.needs_manual_testing,
+                manual_test_checklist=manual_test_checklist,
+                followup_questions=[],
+                ui_layout_hint=ui_layout_hint,
+                confidence=confidence,
+            )
+        )
+
     def _determine_testing_status(
         self,
         recent_events: Sequence[ProjectManagerEvent],
@@ -614,6 +925,194 @@ class ProjectManagerService:
         workspace_mode = "git worktree" if project.default_use_git_worktree else "plain workspace"
         return (
             f"Saved defaults currently point at {backend} / {provider}, base branch {branch}, using {workspace_mode} mode."
+        )
+
+    def _latest_operator_request(
+        self,
+        recent_messages: Sequence[ProjectManagerMessage],
+    ) -> Optional[Dict[str, Optional[str]]]:
+        for message in reversed(recent_messages):
+            if message.role != "operator":
+                continue
+            if str(message.metadata.get("message_type") or "ask") != "ask":
+                continue
+            return {
+                "content": message.content,
+                "urgency": str(message.metadata.get("urgency") or ""),
+                "backend_preference": str(message.metadata.get("backend_preference") or ""),
+                "execution_mode": str(message.metadata.get("execution_mode") or ""),
+            }
+        return None
+
+    def _normalize_urgency(self, urgency: Optional[str]) -> str:
+        value = str(urgency or "normal").strip().lower()
+        return value if value in {"low", "normal", "high", "critical"} else "normal"
+
+    def _normalize_backend_preference(self, backend_preference: Optional[str]) -> Optional[str]:
+        value = str(backend_preference or "").strip()
+        if not value or value == "auto":
+            return None
+        return value
+
+    def _normalize_execution_mode_hint(self, execution_mode: Optional[str]) -> Optional[str]:
+        value = str(execution_mode or "").strip()
+        if not value:
+            return None
+        return value if value in self.VALID_EXECUTION_MODES else None
+
+    def _preferred_backend(
+        self,
+        project: SavedProject,
+        *,
+        baseline: ProjectManagerResponse,
+        latest_summary: Dict[str, Any],
+        backend_preference: Optional[str],
+    ) -> str:
+        if backend_preference:
+            return backend_preference
+        if baseline.draft_task and baseline.draft_task.backend:
+            return baseline.draft_task.backend
+        return str(latest_summary.get("backend") or project.default_backend or "messages_api")
+
+    def _preferred_provider(
+        self,
+        project: SavedProject,
+        *,
+        baseline: ProjectManagerResponse,
+        latest_summary: Dict[str, Any],
+    ) -> Optional[str]:
+        if baseline.draft_task and baseline.draft_task.provider:
+            return baseline.draft_task.provider
+        provider = str(latest_summary.get("provider") or project.default_provider or "").strip()
+        return provider or None
+
+    def _phase_from_request(
+        self,
+        *,
+        baseline: ProjectManagerResponse,
+        operator_message: str,
+        explicit_plan: bool,
+        explicit_debug: bool,
+        explicit_polish: bool,
+    ) -> str:
+        lowered = operator_message.lower()
+        if explicit_debug:
+            return "debugging"
+        if explicit_plan and "implement" not in lowered and "fix" not in lowered:
+            return "planning"
+        if explicit_polish:
+            return "polish"
+        if baseline.phase in {"blocked", "release_ready"}:
+            return "implementation"
+        return baseline.phase if baseline.phase in self.VALID_PHASES else "implementation"
+
+    def _layout_hint_for_phase(self, phase: str) -> str:
+        if phase in self.VALID_LAYOUT_HINTS:
+            return phase
+        return "planning"
+
+    def _infer_execution_mode_from_request(
+        self,
+        operator_message: str,
+        baseline: ProjectManagerResponse,
+        latest_summary: Dict[str, Any],
+    ) -> str:
+        lowered = operator_message.lower()
+        if any(token in lowered for token in ("read-only", "read only", "audit", "review", "what to do next", "plan")):
+            return "read_only"
+        if any(token in lowered for token in ("polish", "cleanup", "wasted space", "layout", "spacing", "format", "tooltip", "badge")):
+            return "safe_changes"
+        if baseline.draft_task and baseline.draft_task.execution_mode:
+            return baseline.draft_task.execution_mode
+        return self._infer_execution_mode(latest_summary)
+
+    def _build_active_focus_bullets(
+        self,
+        *,
+        operator_message: str,
+        baseline: ProjectManagerResponse,
+        execution_mode: str,
+        phase: str,
+    ) -> List[str]:
+        mode_label = {
+            "read_only": "Keep this pass read-only and end with a concise next-step plan.",
+            "safe_changes": "Keep the changes targeted and safe instead of rewriting working flows.",
+            "coding_pass": "Carry the task through implementation and verification in one focused pass.",
+        }[execution_mode]
+        bullets = [
+            f"Focus on the operator request: {self._truncate(operator_message, 180)}",
+            mode_label,
+            "Preserve the existing AI Telescreen architecture and call out any manual verification still needed.",
+        ]
+        if phase == "debugging":
+            bullets.insert(1, "Start by reproducing the current blocker before making changes.")
+        elif phase == "planning":
+            bullets.insert(1, "Translate the current project state into one concrete recommended next task.")
+        elif phase == "polish":
+            bullets.insert(1, "Prioritize readability, layout quality, and operator-facing clarity.")
+        if baseline.active_focus_bullets:
+            bullets.extend(baseline.active_focus_bullets[:1])
+        return self._normalize_bullets(bullets, limit=4)
+
+    def _build_operator_draft_task(
+        self,
+        project: SavedProject,
+        *,
+        baseline: ProjectManagerResponse,
+        latest_summary: Dict[str, Any],
+        operator_message: str,
+        preferred_backend: str,
+        preferred_provider: Optional[str],
+        urgency: str,
+        execution_mode: str,
+    ) -> ProjectManagerDraftTask:
+        priority_map = {"low": -1, "normal": 0, "high": 1, "critical": 2}
+        context_line = baseline.reason or (baseline.summary_bullets[0] if baseline.summary_bullets else "")
+        if execution_mode == "read_only":
+            prompt = (
+                f"Review the current AI Telescreen project context for {project.name}. "
+                f"Operator request: {operator_message}. "
+                f"Current manager context: {context_line}. "
+                "Work read-only in the prepared repo or workspace, summarize the current phase, recommend the best next step, "
+                "and call out any manual testing or blockers. Do not make code changes."
+            )
+        elif "debug" in operator_message.lower() or "fix" in operator_message.lower():
+            prompt = (
+                f"Investigate the next AI Telescreen debugging pass for {project.name}. "
+                f"Operator request: {operator_message}. "
+                f"Current manager context: {context_line}. "
+                "Reproduce the issue in the prepared project workspace, implement the smallest safe fix, "
+                "and finish with tests run plus any manual verification still needed."
+            )
+        else:
+            prompt = (
+                f"Implement the next AI Telescreen project pass for {project.name}. "
+                f"Operator request: {operator_message}. "
+                f"Current manager context: {context_line}. "
+                "Work in the prepared project workspace, preserve the existing architecture, "
+                "make the requested changes, and finish with a concise verification summary plus any manual testing still needed."
+            )
+        rationale_bullets = [
+            "This draft was derived from a direct operator request on the project page.",
+            f"The manager kept the recommendation advisory and scoped it for {execution_mode.replace('_', ' ')} work.",
+        ]
+        if urgency in {"high", "critical"}:
+            rationale_bullets.append(f"The operator marked this request as {urgency}, so the draft priority was raised.")
+        if baseline.needs_manual_testing:
+            rationale_bullets.append("Recent browser-facing work still has a manual verification ask, so the next pass should stay scoped.")
+        return self._normalize_draft_task(
+            ProjectManagerDraftTask(
+                prompt=prompt,
+                backend=preferred_backend,
+                task_type=str(latest_summary.get("task_type") or "code"),
+                priority=priority_map.get(urgency, 0),
+                use_git_worktree=bool(project.default_use_git_worktree),
+                base_branch=project.default_base_branch,
+                provider=preferred_provider,
+                execution_mode=execution_mode,
+                rationale_bullets=rationale_bullets,
+                derived_from_operator_message=operator_message,
+            )
         )
 
     def _summary_bullets(

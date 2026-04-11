@@ -138,6 +138,7 @@ AI Telescreen is now web-first for normal operator control:
 - save projects with repo and launch defaults
 - edit saved projects from the browser
 - launch jobs from project pages
+- talk to the Project Manager from the top of each project page
 - run queued jobs immediately from the browser
 - duplicate existing jobs
 - re-run jobs through a prefilled browser form
@@ -204,7 +205,18 @@ The manager now persists a full structured response with fields such as:
 
 The project page renders those fields as dense cards and bullet sections instead of dumping raw JSON. When the manager recommends `launch_followup_job`, AI Telescreen also stores a compact display snapshot plus a structured draft task so the browser can offer operator-controlled `Launch Task`, `Edit Draft`, and `Ask Follow-up` actions without auto-enqueueing work behind the scenes.
 
-To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events per project and compacts older outcomes into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log.
+The project page now includes a real interactive Project Manager composer at the top. Operators can type a new direction such as "Review the codebase and tell me what to do next" or "Focus on the wasted space in this page", optionally hint urgency, backend preference, and execution mode, and receive a fresh structured response rendered as compact browser cards instead of raw JSON.
+
+That interactive response stays advisory by default. From the browser, operators can:
+
+- `Save as Advisory Context`
+- `Ask Follow-up`
+- `Edit Draft`
+- `Launch Task`
+
+The manager does not auto-enqueue work just because a message was submitted.
+
+To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events and recent operator/manager messages per project, then compacts older outcomes into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log.
 
 ## Diagnostics and Doctor
 

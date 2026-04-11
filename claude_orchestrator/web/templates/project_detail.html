@@ -5,7 +5,7 @@
     <div>
       <a href="/projects">← Back to Projects</a>
       <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ project.name }}</h1>
-      <p class="subtitle">Saved launch defaults for this project template and launch point.</p>
+      <p class="subtitle">Saved launch defaults, project-manager guidance, and recent launches for this AI Telescreen project.</p>
       <div class="value-block path" style="margin-top: 12px;" title="{{ project.repo_path }}">{{ project.repo_path }}</div>
     </div>
     <div class="toolbar">
@@ -15,10 +15,238 @@
     </div>
   </div>
 
-  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+  <section class="panel" id="project-manager-composer">
+    <div class="split">
+      <div>
+        <h2 style="margin-top:0;">Talk to Project Manager</h2>
+        <p class="meta">Tell the project manager what should happen next. It will return a structured recommendation, keep bounded conversation history, and stay advisory unless you choose to launch the draft.</p>
+      </div>
+      <div class="pill-row">
+        <span class="pill small">phase {{ project_manager.state.current_phase }}</span>
+        <span class="pill small">{{ project_manager.state.testing_status }}</span>
+        {% if project_manager.response %}
+          <span class="pill small">{{ project_manager.response.decision }}</span>
+          <span class="pill small">{{ project_manager.response.confidence }}</span>
+        {% endif %}
+        {% if project_manager.state.needs_manual_testing %}
+          <span class="pill small status-pill status-waiting_retry">manual testing needed</span>
+        {% endif %}
+      </div>
+    </div>
+    {% if manager_error %}
+      <p style="color: var(--danger); margin-top: 12px;">{{ manager_error }}</p>
+    {% endif %}
+    <form method="post" action="/projects/{{ project.id }}/manager/messages" class="form-grid" style="margin-top: 12px;">
+      <label class="full">
+        <span class="meta">Tell the project manager what you want to do next</span><br />
+        <textarea name="message" required style="min-height: 132px;">{{ manager_form_values.message }}</textarea>
+      </label>
+      <label>
+        <span class="meta">Urgency</span><br />
+        <select name="urgency">
+          {% for option in ["low", "normal", "high", "critical"] %}
+            <option value="{{ option }}" {% if manager_form_values.urgency == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Backend Preference</span><br />
+        <select name="backend_preference">
+          {% for backend_name in available_backends %}
+            <option value="{{ backend_name }}" {% if manager_form_values.backend_preference == backend_name %}selected{% endif %}>
+              {{ backend_name }}
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Execution Mode</span><br />
+        <select name="execution_mode">
+          <option value="" {% if not manager_form_values.execution_mode %}selected{% endif %}>auto</option>
+          {% for mode in ["read_only", "safe_changes", "coding_pass"] %}
+            <option value="{{ mode }}" {% if manager_form_values.execution_mode == mode %}selected{% endif %}>{{ mode }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="full toolbar">
+        <button type="submit">Ask Project Manager</button>
+        <a class="pill" href="/jobs/new?project_id={{ project.id }}">Open Full Job Form</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" style="margin-top: 18px;">
+    <div class="split">
+      <div>
+        <h2 style="margin-top:0;">Latest Project Manager Response</h2>
+        <p class="meta">The manager response is rendered from the structured schema already stored for this project, so the browser can keep the latest recommendation readable and actionable.</p>
+      </div>
+      {% if project_manager.response %}
+        <div class="pill-row">
+          <span class="pill small">{{ project_manager.response.phase }}</span>
+          <span class="pill small">{{ project_manager.response.ui_layout_hint }}</span>
+          <span class="pill small">{{ project_manager.response.decision }}</span>
+          <span class="pill small">{{ project_manager.response.confidence }}</span>
+        </div>
+      {% endif %}
+    </div>
+
+    {% if project_manager.response %}
+      <div class="summary-grid two" style="margin-top: 12px;">
+        <div>
+          <div class="meta">Recommendation</div>
+          <div class="value-block">
+            <strong>{{ project_manager.response.decision }}</strong><br />
+            {{ project_manager.response.reason }}
+          </div>
+        </div>
+        <div>
+          <div class="meta">Current summary</div>
+          <div class="value-block">{{ project_manager.display.headline or project_manager.state.summary }}</div>
+        </div>
+      </div>
+
+      <div class="toolbar" style="margin-top: 12px;">
+        <form method="post" action="/projects/{{ project.id }}/manager/save-advisory">
+          <button type="submit" class="secondary">Save as Advisory Context</button>
+        </form>
+        <a class="pill" href="/projects/{{ project.id }}?manager_followup=1#project-manager-composer">Ask Follow-up</a>
+        {% if project_manager.response.draft_task %}
+          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit Draft</a>
+        {% endif %}
+        {% if project_manager.response.decision == "launch_followup_job" and project_manager.response.draft_task %}
+          <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
+            <button type="submit">Launch Task</button>
+          </form>
+        {% endif %}
+      </div>
+
+      <div class="summary-grid two" style="margin-top: 14px;">
+        {% for section in project_manager.display.primary_sections %}
+          <div>
+            <div class="meta">{{ section["title"] }}</div>
+            <ul class="list-compact">
+              {% for item in section["items"] %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endfor %}
+      </div>
+
+      {% if project_manager.display.secondary_sections %}
+        <div class="summary-grid two" style="margin-top: 4px;">
+          {% for section in project_manager.display.secondary_sections %}
+            <div>
+              <div class="meta">{{ section["title"] }}</div>
+              <ul class="list-compact">
+                {% for item in section["items"] %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      {% if project_manager.response.draft_task %}
+        <div style="margin-top: 14px;">
+          <div class="meta">Draft Task</div>
+          <div class="summary-grid two" style="margin-top: 8px;">
+            <div>
+              <div class="meta">Prompt</div>
+              <div class="value-block">{{ project_manager.response.draft_task.prompt }}</div>
+            </div>
+            <div>
+              <div class="meta">Draft settings</div>
+              <div class="stack-compact">
+                <div class="pill-row">
+                  <span class="pill small">{{ project_manager.response.draft_task.backend }}</span>
+                  <span class="pill small">{{ project_manager.response.draft_task.task_type }}</span>
+                  <span class="pill small">priority {{ project_manager.response.draft_task.priority }}</span>
+                  {% if project_manager.response.draft_task.provider %}
+                    <span class="pill small">{{ project_manager.response.draft_task.provider }}</span>
+                  {% endif %}
+                  {% if project_manager.response.draft_task.execution_mode %}
+                    <span class="pill small">{{ project_manager.response.draft_task.execution_mode }}</span>
+                  {% endif %}
+                  {% if project_manager.response.draft_task.base_branch %}
+                    <span class="pill small">base {{ project_manager.response.draft_task.base_branch }}</span>
+                  {% endif %}
+                  {% if project_manager.response.draft_task.use_git_worktree %}
+                    <span class="pill small">worktree</span>
+                  {% endif %}
+                </div>
+                <div class="meta">Derived from operator message: {{ project_manager.response.draft_task.derived_from_operator_message or "n/a" }}</div>
+              </div>
+            </div>
+          </div>
+          {% if project_manager.response.draft_task.rationale_bullets %}
+            <div style="margin-top: 10px;">
+              <div class="meta">Draft rationale</div>
+              <ul class="list-compact">
+                {% for item in project_manager.response.draft_task.rationale_bullets %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+        </div>
+      {% endif %}
+    {% else %}
+      <p class="meta" style="margin-top: 12px;">No project-manager response is stored yet. Start with a message above or launch the first project-linked job so the manager has concrete outcomes to supervise.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" style="margin-top: 18px;">
+    <div class="split">
+      <div>
+        <h2 style="margin-top:0;">Recent Project Manager Conversation</h2>
+        <p class="meta">The manager keeps a bounded recent conversation so follow-up requests stay grounded without turning into an unbounded raw transcript.</p>
+      </div>
+      <div class="meta">{{ project_manager.recent_messages | length }} recent messages</div>
+    </div>
+    {% if project_manager.recent_messages %}
+      <div class="conversation-list" style="margin-top: 12px;">
+        {% for message in project_manager.recent_messages %}
+          <div class="conversation-item {{ message.role }}">
+            <div class="conversation-header">
+              <div class="pill-row">
+                <span class="pill small">{{ message.role }}</span>
+                {% if message.message_type == "advisory_save" %}
+                  <span class="pill small">advisory saved</span>
+                {% elif message.message_type == "ask" %}
+                  {% if message.urgency %}
+                    <span class="pill small">{{ message.urgency }}</span>
+                  {% endif %}
+                  {% if message.backend_preference %}
+                    <span class="pill small">{{ message.backend_preference }}</span>
+                  {% endif %}
+                  {% if message.execution_mode %}
+                    <span class="pill small">{{ message.execution_mode }}</span>
+                  {% endif %}
+                {% elif message.decision %}
+                  <span class="pill small">{{ message.decision }}</span>
+                  {% if message.confidence %}
+                    <span class="pill small">{{ message.confidence }}</span>
+                  {% endif %}
+                {% endif %}
+              </div>
+              <div class="meta">{{ message.created_at or "n/a" }}</div>
+            </div>
+            <div>{{ message.content_preview }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="meta" style="margin-top: 12px;">No recent Project Manager conversation has been recorded yet.</p>
+    {% endif %}
+  </section>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 18px;">
     <section class="panel">
       <h2 style="margin-top:0;">Defaults</h2>
-      <p class="meta">These defaults are reused when you launch a new task from this project.</p>
+      <p class="meta">Saved projects are launch defaults and context anchors, not active tasks. These values prefill new jobs and draft launches from this page.</p>
       <div class="summary-grid">
         <div>
           <div class="meta">Repo path</div>
@@ -120,7 +348,7 @@
       {% if integration.summary.notes %}
         <div style="margin-top: 12px;">
           <strong>Notes</strong>
-          <ul>
+          <ul class="list-compact">
             {% for note in integration.summary.notes %}
               <li>{{ note }}</li>
             {% endfor %}
@@ -131,7 +359,7 @@
 
     <section class="panel">
       <h2 style="margin-top:0;">Launch a New Task</h2>
-      <p class="meta">Use this quick form for a fast launch, or open the full job form if you want to review every field.</p>
+      <p class="meta">Use this quick form when you already know the prompt, or start with the Project Manager composer above if you want a recommended draft first.</p>
       <form method="post" action="/projects/{{ project.id }}/launch" class="form-grid">
         <label class="full">
           <span class="meta">Prompt</span><br />
@@ -160,205 +388,80 @@
   <section class="panel" style="margin-top: 18px;">
     <div class="split">
       <div>
-        <h2 style="margin-top:0;">Project Manager</h2>
-        <p class="meta">The project manager keeps compact memory for this saved project, ingests completed and failed jobs, and turns the latest recommendation into a structured browser-friendly plan.</p>
+        <h2 style="margin-top:0;">Recent Ingested Outcomes</h2>
+        <p class="meta">Completed and failed project-linked jobs are summarized here so the manager can keep context compact while still showing what happened recently.</p>
       </div>
-      <div class="pill-row">
-        <span class="pill small">phase {{ project_manager.state.current_phase }}</span>
-        {% if project_manager.response %}
-          <span class="pill small">{{ project_manager.response.decision }}</span>
-          <span class="pill small">{{ project_manager.response.confidence }}</span>
-        {% endif %}
-        <span class="pill small">{{ project_manager.state.testing_status }}</span>
-        {% if project_manager.state.needs_manual_testing %}
-          <span class="pill small status-pill status-waiting_retry">manual testing needed</span>
-        {% endif %}
-      </div>
+      <div class="meta">Last ingested {{ project_manager.state.last_job_ingested_at or "n/a" }}</div>
     </div>
-    {% if project_manager.response %}
-      <div class="summary-grid two" style="margin-top: 12px;">
-        <div>
-          <div class="meta">Decision</div>
-          <div class="value-block">
-            <strong>{{ project_manager.response.decision }}</strong><br />
-            {{ project_manager.response.reason }}
-          </div>
-        </div>
-        <div>
-          <div class="meta">Layout Hint</div>
-          <div class="value-block">
-            {{ project_manager.response.ui_layout_hint }} layout with {{ project_manager.response.confidence }} confidence.
-          </div>
-        </div>
-      </div>
-      {% if project_manager.response.decision == "launch_followup_job" and project_manager.response.draft_task %}
-        <div class="toolbar" style="margin-top: 12px;">
-          <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
-            <button type="submit">Launch Task</button>
-          </form>
-          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit Draft</a>
-          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_followup=1">Ask Follow-up</a>
-        </div>
-      {% elif project_manager.response.followup_questions %}
-        <div class="toolbar" style="margin-top: 12px;">
-          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_followup=1">Ask Follow-up</a>
-        </div>
-      {% endif %}
-    {% endif %}
-    <div class="summary-grid two" style="margin-top: 12px;">
-      <div>
-        <div class="meta">Current summary</div>
-        <div class="value-block">{{ project_manager.state.summary }}</div>
-      </div>
-      <div>
-        <div class="meta">Display headline</div>
-        <div class="value-block">{{ project_manager.display.headline or "No manager headline recorded yet." }}</div>
-      </div>
-      <div>
-        <div class="meta">Last ingested outcome</div>
-        <div>{{ project_manager.state.last_job_ingested_at or "n/a" }}</div>
-      </div>
-      <div>
-        <div class="meta">Last compaction</div>
-        <div>{{ project_manager.state.last_compacted_at or "n/a" }}</div>
-      </div>
-    </div>
-    {% if project_manager.state.rolling_summary %}
-      <div style="margin-top: 12px;">
-        <div class="meta">Rolling summary</div>
-        <div class="value-block">{{ project_manager.state.rolling_summary }}</div>
-      </div>
-    {% endif %}
-        <div class="summary-grid two" style="margin-top: 12px;">
-          {% for section in project_manager.display.primary_sections %}
-            <div>
-              <div class="meta">{{ section["title"] }}</div>
-              <ul style="margin-top: 8px;">
-                {% for item in section["items"] %}
-                  <li>{{ item }}</li>
-                {% endfor %}
-              </ul>
-            </div>
-          {% endfor %}
-    </div>
-    {% if project_manager.display.secondary_sections %}
-      <div class="summary-grid two" style="margin-top: 4px;">
-        {% for section in project_manager.display.secondary_sections %}
-          <div>
-            <div class="meta">{{ section["title"] }}</div>
-            <ul style="margin-top: 8px;">
-              {% for item in section["items"] %}
-                <li>{{ item }}</li>
-              {% endfor %}
-            </ul>
-          </div>
-        {% endfor %}
-      </div>
-    {% endif %}
-    {% if project_manager.response and project_manager.response.draft_task %}
-      <div style="margin-top: 12px;">
-        <div class="meta">Draft task</div>
-        <div class="summary-grid two">
-          <div>
-            <div class="meta">Backend</div>
-            <div>{{ project_manager.response.draft_task.backend }}</div>
-          </div>
-          <div>
-            <div class="meta">Task type</div>
-            <div>{{ project_manager.response.draft_task.task_type }}</div>
-          </div>
-          <div>
-            <div class="meta">Execution mode</div>
-            <div>{{ project_manager.response.draft_task.execution_mode or "n/a" }}</div>
-          </div>
-          <div>
-            <div class="meta">Base branch</div>
-            <div>{{ project_manager.response.draft_task.base_branch or "n/a" }}</div>
-          </div>
-        </div>
-        <div class="value-block" style="margin-top: 10px;">{{ project_manager.response.draft_task.prompt }}</div>
-        {% if project_manager.response.draft_task.rationale_bullets %}
-          <div class="meta" style="margin-top: 10px;">Draft rationale</div>
-          <ul style="margin-top: 8px;">
-            {% for item in project_manager.response.draft_task.rationale_bullets %}
-              <li>{{ item }}</li>
-            {% endfor %}
-          </ul>
-        {% endif %}
-      </div>
-    {% endif %}
-    <div style="margin-top: 12px;">
-      <div class="meta">Recent ingested outcomes</div>
-      {% if project_manager.recent_events %}
-        <div class="table-wrap">
-          <table class="data-table" style="margin-top: 8px; min-width: 760px;">
-            <thead>
+    {% if project_manager.recent_events %}
+      <div class="table-wrap">
+        <table class="data-table" style="margin-top: 8px; min-width: 760px;">
+          <thead>
+            <tr>
+              <th>Job</th>
+              <th>Status</th>
+              <th>Backend</th>
+              <th>Prompt</th>
+              <th>Outcome</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for event in project_manager.recent_events %}
               <tr>
-                <th>Job</th>
-                <th>Status</th>
-                <th>Backend</th>
-                <th>Prompt</th>
-                <th>Outcome</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for event in project_manager.recent_events %}
-                <tr>
-                  <td>
-                    <div class="stack-compact tight">
-                      {% if event.source_job_id %}
-                        <a href="/jobs/{{ event.source_job_id }}" title="{{ event.source_job_id }}">
-                          <span class="mono-inline">{{ event.source_job_short_id }}</span>
-                        </a>
-                      {% else %}
-                        <span class="mono-inline">n/a</span>
-                      {% endif %}
-                      <div class="meta">attempt {{ event.attempt_number or "n/a" }} · {{ event.created_at }}</div>
-                    </div>
-                  </td>
-                  <td><span class="pill small status-pill status-{{ event.outcome_status }}">{{ event.outcome_status }}</span></td>
-                  <td>
-                    <div class="stack-compact tight">
-                      <span class="pill small">{{ event.backend or "n/a" }}</span>
-                      <span class="meta">{{ event.provider or "n/a" }}</span>
-                    </div>
-                  </td>
-                  <td><div class="truncate-2" title="{{ event.prompt }}">{{ event.prompt or "n/a" }}</div></td>
-                  <td>
-                    {% if event.error_summary or event.error_reason %}
-                      <div class="truncate-2" title="{{ event.error_summary or event.error_reason }}">{{ event.error_summary or event.error_reason }}</div>
+                <td>
+                  <div class="stack-compact tight">
+                    {% if event.source_job_id %}
+                      <a href="/jobs/{{ event.source_job_id }}" title="{{ event.source_job_id }}">
+                        <span class="mono-inline">{{ event.source_job_short_id }}</span>
+                      </a>
                     {% else %}
-                      <div class="truncate-2" title="{{ event.response_summary_preview }}">{{ event.response_summary_preview or "Completed without an explicit summary." }}</div>
+                      <span class="mono-inline">n/a</span>
                     {% endif %}
-                  </td>
-                  <td>
-                    <div class="stack-compact tight">
-                      {% if event.manual_testing_needed %}
-                        <span class="pill small status-pill status-waiting_retry">manual test</span>
-                      {% endif %}
-                      {% if event.changed_files %}
-                        <div class="meta truncate-2" title="{{ event.changed_files | join(', ') }}">
-                          {{ event.changed_files | join(", ") }}
-                        </div>
-                      {% elif event.stream_highlights %}
-                        <div class="meta truncate-2" title="{{ event.stream_highlights | join(' | ') }}">
-                          {{ event.stream_highlights | join(" | ") }}
-                        </div>
-                      {% else %}
-                        <div class="meta">No extra notes</div>
-                      {% endif %}
-                    </div>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <p class="meta">No completed or failed jobs have been ingested into project-manager memory yet.</p>
-      {% endif %}
-    </div>
+                    <div class="meta">attempt {{ event.attempt_number or "n/a" }} · {{ event.created_at }}</div>
+                  </div>
+                </td>
+                <td><span class="pill small status-pill status-{{ event.outcome_status }}">{{ event.outcome_status }}</span></td>
+                <td>
+                  <div class="stack-compact tight">
+                    <span class="pill small">{{ event.backend or "n/a" }}</span>
+                    <span class="meta">{{ event.provider or "n/a" }}</span>
+                  </div>
+                </td>
+                <td><div class="truncate-2" title="{{ event.prompt }}">{{ event.prompt or "n/a" }}</div></td>
+                <td>
+                  {% if event.error_summary or event.error_reason %}
+                    <div class="truncate-2" title="{{ event.error_summary or event.error_reason }}">{{ event.error_summary or event.error_reason }}</div>
+                  {% else %}
+                    <div class="truncate-2" title="{{ event.response_summary_preview }}">{{ event.response_summary_preview or "Completed without an explicit summary." }}</div>
+                  {% endif %}
+                </td>
+                <td>
+                  <div class="stack-compact tight">
+                    {% if event.manual_testing_needed %}
+                      <span class="pill small status-pill status-waiting_retry">manual test</span>
+                    {% endif %}
+                    {% if event.changed_files %}
+                      <div class="meta truncate-2" title="{{ event.changed_files | join(', ') }}">
+                        {{ event.changed_files | join(", ") }}
+                      </div>
+                    {% elif event.stream_highlights %}
+                      <div class="meta truncate-2" title="{{ event.stream_highlights | join(' | ') }}">
+                        {{ event.stream_highlights | join(" | ") }}
+                      </div>
+                    {% else %}
+                      <div class="meta">No extra notes</div>
+                    {% endif %}
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="meta">No completed or failed jobs have been ingested into project-manager memory yet.</p>
+    {% endif %}
   </section>
 
   <section class="panel" style="margin-top: 18px;">

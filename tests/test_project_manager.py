@@ -150,3 +150,88 @@ def test_project_manager_compacts_older_events(tmp_path):
     assert snapshot.state.rolling_summary is not None
     assert "Older manager memory" in snapshot.state.rolling_summary
     assert snapshot.state.display_snapshot["primary_sections"]
+
+
+def test_project_manager_submit_message_creates_structured_response_and_history(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    project = orchestrator.create_saved_project(
+        name="Interactive Manager",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=True,
+        notes="interactive planning",
+    )
+
+    snapshot = orchestrator.submit_project_manager_message(
+        project.id,
+        "Review the codebase and tell me what to do next.",
+        urgency="normal",
+        backend_preference="messages_api",
+        execution_mode="read_only",
+    )
+    stored_messages = repository.list_project_manager_messages(project.id, limit=None)
+
+    assert snapshot.state.latest_response is not None
+    assert snapshot.state.latest_response.decision == "launch_followup_job"
+    assert snapshot.state.latest_response.draft_task is not None
+    assert snapshot.state.latest_response.draft_task.execution_mode == "read_only"
+    assert snapshot.state.latest_response.draft_task.backend == "messages_api"
+    assert [message.role for message in snapshot.recent_messages][-2:] == ["operator", "manager"]
+    assert len(stored_messages) == 2
+    assert stored_messages[0].role == "manager"
+    assert stored_messages[1].role == "operator"
+
+
+def test_project_manager_message_history_is_bounded(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    project = orchestrator.create_saved_project(
+        name="Bounded History",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes=None,
+    )
+
+    for index in range(7):
+        snapshot = orchestrator.submit_project_manager_message(
+            project.id,
+            f"Plan follow-up pass {index}",
+            urgency="normal",
+            execution_mode="read_only",
+        )
+
+    stored_messages = repository.list_project_manager_messages(project.id, limit=None)
+
+    assert len(stored_messages) <= 10
+    assert snapshot.recent_messages[-1].role == "manager"
+    assert any("Plan follow-up pass 6" in message.content for message in snapshot.recent_messages)
+
+
+def test_project_manager_save_advisory_records_message(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    project = orchestrator.create_saved_project(
+        name="Advisory Save",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes=None,
+    )
+
+    orchestrator.submit_project_manager_message(
+        project.id,
+        "Plan the next UI cleanup pass.",
+        urgency="high",
+        execution_mode="safe_changes",
+    )
+    snapshot = orchestrator.save_project_manager_advisory(project.id)
+    stored_messages = repository.list_project_manager_messages(project.id, limit=None)
+
+    assert snapshot.state.latest_response is not None
+    assert stored_messages[0].metadata["message_type"] == "advisory_save"
+    assert stored_messages[0].role == "operator"

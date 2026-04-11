@@ -640,6 +640,137 @@ def test_project_detail_renders_project_manager_summary(tmp_path):
     assert _short_id(job.id) in detail.text
 
 
+def test_project_detail_project_manager_composer_submits_and_renders_history(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Composer Project",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="composer coverage",
+    )
+
+    detail = client.get(f"/projects/{project.id}")
+    submitted = client.post(
+        f"/projects/{project.id}/manager/messages",
+        data={
+            "message": "Review the codebase and tell me what to do next.",
+            "urgency": "normal",
+            "backend_preference": "messages_api",
+            "execution_mode": "read_only",
+        },
+        follow_redirects=True,
+    )
+
+    assert detail.status_code == 200
+    assert "Talk to Project Manager" in detail.text
+    assert "Ask Project Manager" in detail.text
+    assert submitted.status_code == 200
+    assert "Save as Advisory Context" in submitted.text
+    assert "Recent Project Manager Conversation" in submitted.text
+    assert "Launch Task" in submitted.text
+    assert "Review the codebase and tell me what to do next." in submitted.text
+
+
+def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Follow-up Project",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="follow-up coverage",
+    )
+    client.post(
+        f"/projects/{project.id}/manager/messages",
+        data={
+            "message": "Plan the next UI cleanup pass.",
+            "urgency": "high",
+            "backend_preference": "auto",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+
+    followup = client.get(f"/projects/{project.id}?manager_followup=1")
+    advisory = client.post(
+        f"/projects/{project.id}/manager/save-advisory",
+        follow_redirects=True,
+    )
+
+    assert followup.status_code == 200
+    assert "Continue the current AI Telescreen project-manager discussion" in followup.text
+    assert advisory.status_code == 200
+    assert "Saved the latest Project Manager guidance as advisory context." in advisory.text
+    assert "advisory saved" in advisory.text
+
+
+def test_project_manager_launch_task_from_interactive_response(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Interactive Launch",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="interactive launch",
+    )
+    client.post(
+        f"/projects/{project.id}/manager/messages",
+        data={
+            "message": "Focus on the wasted space in this page.",
+            "urgency": "normal",
+            "backend_preference": "messages_api",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+
+    new_job = client.get(f"/jobs/new?project_id={project.id}&manager_draft=1")
+    launched = client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=False)
+    launched_job_id = Path(urlparse(launched.headers["location"]).path).name
+    launched_job = context.repository.get_job(launched_job_id)
+
+    assert new_job.status_code == 200
+    assert "Project Manager draft" in new_job.text
+    assert "Focus on the wasted space in this page." in new_job.text
+    assert launched.status_code == 303
+    assert launched_job.metadata["project_id"] == project.id
+    assert launched_job.metadata["execution_mode"] == "safe_changes"
+
+
 def test_project_manager_draft_prefills_new_job_form_and_launches(tmp_path):
     context = bootstrap(tmp_path)
     orchestrator = OrchestratorService(

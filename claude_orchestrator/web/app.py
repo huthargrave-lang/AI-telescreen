@@ -210,6 +210,29 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 }
                 for event in snapshot.recent_events
             ],
+            "recent_messages": [
+                {
+                    "id": message.id,
+                    "role": message.role,
+                    "content": message.content,
+                    "content_preview": _truncate_text(message.content, limit=180) or "",
+                    "created_at": message.created_at.isoformat() if message.created_at else None,
+                    "message_type": message.metadata.get("message_type"),
+                    "urgency": message.metadata.get("urgency"),
+                    "backend_preference": message.metadata.get("backend_preference"),
+                    "execution_mode": message.metadata.get("execution_mode"),
+                    "decision": (
+                        message.metadata.get("decision")
+                        or ((message.metadata.get("response") or {}).get("decision") if isinstance(message.metadata.get("response"), dict) else None)
+                    ),
+                    "confidence": (
+                        (message.metadata.get("response") or {}).get("confidence")
+                        if isinstance(message.metadata.get("response"), dict)
+                        else None
+                    ),
+                }
+                for message in snapshot.recent_messages
+            ],
         }
 
     def _job_detail_context(request: Request, job_id: str) -> dict:
@@ -313,6 +336,48 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "cancel_href": f"/projects/{project.id}" if project else "/projects",
         }
 
+    def _default_manager_form_values() -> dict:
+        return {
+            "message": "",
+            "urgency": "normal",
+            "backend_preference": "auto",
+            "execution_mode": "",
+        }
+
+    def _project_manager_composer_values(
+        project,
+        project_manager: dict,
+        *,
+        followup: bool = False,
+        form_values: Optional[dict] = None,
+    ) -> dict:
+        values = _default_manager_form_values()
+        response = project_manager.get("response") or {}
+        if followup:
+            questions = response.get("followup_questions") or []
+            if questions:
+                values["message"] = "\n".join(
+                    [
+                        f"Continue the current AI Telescreen project-manager discussion for {project.name}.",
+                        "Please help with these follow-up points:",
+                        *[f"- {question}" for question in questions],
+                    ]
+                )
+            else:
+                values["message"] = (
+                    f"Continue the current AI Telescreen project-manager discussion for {project.name} "
+                    f"and refine the latest recommendation: {response.get('reason') or 'What should happen next?'}"
+                )
+            values["execution_mode"] = "read_only"
+        draft_task = response.get("draft_task") or {}
+        if draft_task.get("backend"):
+            values["backend_preference"] = draft_task["backend"]
+        if draft_task.get("execution_mode"):
+            values["execution_mode"] = draft_task["execution_mode"]
+        if form_values:
+            values.update(form_values)
+        return values
+
     def _coerce_checkbox(value) -> bool:
         return str(value).lower() in {"1", "true", "on", "yes"}
 
@@ -409,6 +474,35 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             }
         )
         return values
+
+    def _project_detail_context(
+        request: Request,
+        project_id: str,
+        *,
+        manager_form_values: Optional[dict] = None,
+        manager_error: Optional[str] = None,
+        manager_followup: bool = False,
+    ) -> dict:
+        project = orchestrator.get_saved_project(project_id)
+        jobs = [serialize_job(job) for job in orchestrator.list_project_jobs(project_id, limit=20)]
+        integration_summary = orchestrator.get_project_integration_summary(project_id)
+        project_manager = serialize_project_manager(orchestrator.get_project_manager_snapshot(project_id))
+        return {
+            "request": request,
+            "project": project,
+            "project_display": serialize_project(project),
+            "jobs": jobs,
+            "integration": serialize_project_integration(integration_summary),
+            "project_manager": project_manager,
+            "manager_form_values": _project_manager_composer_values(
+                project,
+                project_manager,
+                followup=manager_followup,
+                form_values=manager_form_values,
+            ),
+            "manager_error": manager_error,
+            "available_backends": ["auto", *_available_backends()],
+        }
 
     def _job_form_values_from_job(job_id: str) -> dict:
         job = orchestrator.repository.get_job(job_id)
@@ -884,22 +978,15 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 
     @app.get("/projects/{project_id}", response_class=HTMLResponse)
-    async def project_detail(request: Request, project_id: str):
-        project = orchestrator.get_saved_project(project_id)
-        jobs = [serialize_job(job) for job in orchestrator.list_project_jobs(project_id, limit=20)]
-        integration_summary = orchestrator.get_project_integration_summary(project_id)
-        project_manager = orchestrator.get_project_manager_snapshot(project_id)
+    async def project_detail(request: Request, project_id: str, manager_followup: Optional[bool] = None):
         return templates.TemplateResponse(
             request=request,
             name="project_detail.html",
-            context={
-                "request": request,
-                "project": project,
-                "project_display": serialize_project(project),
-                "jobs": jobs,
-                "integration": serialize_project_integration(integration_summary),
-                "project_manager": serialize_project_manager(project_manager),
-            },
+            context=_project_detail_context(
+                request,
+                project_id,
+                manager_followup=bool(manager_followup),
+            ),
         )
 
     @app.post("/projects/{project_id}/launch")
@@ -916,6 +1003,53 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             max_attempts=int(str(form.get("max_attempts") or "5")),
         )
         return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
+
+    @app.post("/projects/{project_id}/manager/messages", response_class=HTMLResponse)
+    async def submit_project_manager_message(request: Request, project_id: str):
+        form = await _parse_form_values(request)
+        manager_form_values = {
+            "message": str(form.get("message") or ""),
+            "urgency": str(form.get("urgency") or "normal"),
+            "backend_preference": str(form.get("backend_preference") or "auto"),
+            "execution_mode": str(form.get("execution_mode") or ""),
+        }
+        try:
+            orchestrator.submit_project_manager_message(
+                project_id,
+                manager_form_values["message"],
+                urgency=manager_form_values["urgency"],
+                backend_preference=manager_form_values["backend_preference"],
+                execution_mode=manager_form_values["execution_mode"] or None,
+            )
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="project_detail.html",
+                context=_project_detail_context(
+                    request,
+                    project_id,
+                    manager_form_values=manager_form_values,
+                    manager_error=str(exc),
+                ),
+                status_code=400,
+            )
+        return _redirect_with_feedback(
+            request,
+            f"/projects/{project_id}",
+            notice="Project Manager updated the project plan and draft recommendation.",
+        )
+
+    @app.post("/projects/{project_id}/manager/save-advisory")
+    async def save_project_manager_advisory(request: Request, project_id: str):
+        try:
+            orchestrator.save_project_manager_advisory(project_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/projects/{project_id}", error=str(exc))
+        return _redirect_with_feedback(
+            request,
+            f"/projects/{project_id}",
+            notice="Saved the latest Project Manager guidance as advisory context.",
+        )
 
     @app.post("/projects/{project_id}/manager/launch-draft")
     async def launch_project_manager_draft(request: Request, project_id: str):

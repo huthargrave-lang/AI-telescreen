@@ -288,6 +288,12 @@
         display: grid;
         gap: 4px;
       }
+      .list-compact {
+        margin: 8px 0 0 18px;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+      }
       .form-grid {
         display: grid;
         gap: 16px;
@@ -315,6 +321,27 @@
         justify-content: space-between;
         align-items: start;
         flex-wrap: wrap;
+      }
+      .conversation-list {
+        display: grid;
+        gap: 10px;
+      }
+      .conversation-item {
+        padding: 12px;
+        border-radius: 16px;
+        border: 1px solid var(--border);
+        background: rgba(29, 29, 26, 0.03);
+      }
+      .conversation-item.operator {
+        background: rgba(0, 95, 115, 0.06);
+      }
+      .conversation-header {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 6px;
       }
       details summary {
         cursor: pointer;

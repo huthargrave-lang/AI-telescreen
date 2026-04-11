@@ -364,6 +364,16 @@ class ProjectManagerEvent:
 
 
 @dataclass
+class ProjectManagerMessage:
+    id: str
+    project_id: str
+    role: str
+    content: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[datetime] = None
+
+
+@dataclass
 class ProjectManagerState:
     project_id: str
     current_phase: str
@@ -388,3 +398,4 @@ class ProjectManagerState:
 class ProjectManagerSnapshot:
     state: ProjectManagerState
     recent_events: List[ProjectManagerEvent] = field(default_factory=list)
+    recent_messages: List[ProjectManagerMessage] = field(default_factory=list)

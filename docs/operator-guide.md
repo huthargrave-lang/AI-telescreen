@@ -58,6 +58,11 @@
 - Older manager events are compacted into a rolling summary so memory stays bounded instead of growing around raw transcripts.
 - The project page is now the main place to review dense manager bullet sections, recent ingested outcomes, and any draft follow-up task.
 - When the manager recommends `launch_followup_job`, the browser can prefill a task draft or launch that draft directly with operator approval.
+- The top of each project page now includes a Project Manager composer so you can type a new direction and get back a fresh structured recommendation without leaving the browser.
+- Composer hints are lightweight and advisory: urgency nudges draft priority, backend preference nudges the recommended backend, and execution mode nudges whether the next draft should stay read-only, make safe changes, or do a full coding pass.
+- `Save as Advisory Context` records the current guidance without launching work.
+- `Ask Follow-up` keeps the conversation going from the same project page instead of forcing you into a separate job flow.
+- Recent Project Manager conversation is stored in a bounded durable history so follow-up stays grounded without becoming an unbounded transcript dump.
 
 ## Browser Task Actions
 
@@ -78,6 +83,8 @@ These actions are intentionally state-aware. Invalid actions should be hidden in
 - `mark_complete` means recent work looks stable enough that the current project phase may be done.
 - The structured response also includes bullet lists for summary, recent changes, active focus, blockers, manual-test steps, and follow-up questions so the browser can render the manager panel predictably.
 - The recommendation is guidance, not automation. You stay in control of whether a new job is launched.
+- `Edit Draft` opens the existing New Job form prefilled from the latest manager draft.
+- `Launch Task` uses the same saved-project orchestration flow as any other browser-created job; it does not create a hidden autonomous loop.
 
 ## Diagnostics
 

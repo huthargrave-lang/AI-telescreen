@@ -19,6 +19,7 @@ from .models import (
     JobStreamEvent,
     JobStatus,
     ProjectManagerEvent,
+    ProjectManagerMessage,
     ProjectManagerRecommendation,
     ProjectManagerResponse,
     ProjectManagerSnapshot,
@@ -524,6 +525,67 @@ class JobRepository:
                 ),
             )
         return inserted.rowcount == 1
+
+    def add_project_manager_message(self, message: ProjectManagerMessage) -> bool:
+        with self.db.connect() as connection:
+            inserted = connection.execute(
+                """
+                INSERT OR IGNORE INTO project_manager_messages (
+                    id,
+                    project_id,
+                    role,
+                    content,
+                    metadata_json,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message.id,
+                    message.project_id,
+                    message.role,
+                    message.content,
+                    _dumps(message.metadata),
+                    to_iso8601(message.created_at),
+                ),
+            )
+        return inserted.rowcount == 1
+
+    def list_project_manager_messages(
+        self,
+        project_id: str,
+        *,
+        limit: Optional[int] = 12,
+    ) -> List[ProjectManagerMessage]:
+        limit_clause = "LIMIT ?" if limit is not None else ""
+        params: List[Any] = [project_id]
+        if limit is not None:
+            params.append(limit)
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM project_manager_messages
+                WHERE project_id = ?
+                ORDER BY created_at DESC
+                {limit_clause}
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._row_to_project_manager_message(row) for row in rows]
+
+    def delete_project_manager_messages(self, project_id: str, message_ids: Sequence[str]) -> int:
+        if not message_ids:
+            return 0
+        placeholders = ",".join("?" for _ in message_ids)
+        with self.db.connect() as connection:
+            deleted = connection.execute(
+                f"""
+                DELETE FROM project_manager_messages
+                WHERE project_id = ?
+                  AND id IN ({placeholders})
+                """,
+                (project_id, *message_ids),
+            )
+        return deleted.rowcount
 
     def list_project_manager_events(
         self,
@@ -1508,6 +1570,16 @@ class JobRepository:
             attempt_number=row["attempt_number"],
             outcome_status=row["outcome_status"],
             summary=_loads(row["summary_json"]),
+        )
+
+    def _row_to_project_manager_message(self, row: Any) -> ProjectManagerMessage:
+        return ProjectManagerMessage(
+            id=row["id"],
+            project_id=row["project_id"],
+            role=row["role"],
+            content=row["content"],
+            metadata=_loads(row["metadata_json"]),
+            created_at=from_iso8601(row["created_at"]),
         )
 
     def _row_to_stream_event(self, row: Any) -> JobStreamEvent:

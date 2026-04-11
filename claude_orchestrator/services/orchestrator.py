@@ -555,6 +555,28 @@ class OrchestratorService:
         self.repository.get_saved_project(project_id)
         return self.project_manager.compact_manager_state(project_id)
 
+    def submit_project_manager_message(
+        self,
+        project_id: str,
+        message: str,
+        *,
+        urgency: Optional[str] = None,
+        backend_preference: Optional[str] = None,
+        execution_mode: Optional[str] = None,
+    ):
+        self.repository.get_saved_project(project_id)
+        return self.project_manager.submit_project_manager_message(
+            project_id,
+            message,
+            urgency=urgency,
+            backend_preference=backend_preference,
+            execution_mode=execution_mode,
+        )
+
+    def save_project_manager_advisory(self, project_id: str):
+        self.repository.get_saved_project(project_id)
+        return self.project_manager.save_project_manager_advisory(project_id)
+
     def launch_job_from_project_manager_draft(
         self,
         project_id: str,
