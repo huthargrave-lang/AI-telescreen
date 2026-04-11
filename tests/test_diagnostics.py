@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from claude_orchestrator.backends.codex_cli import CodexCliBackend
+from claude_orchestrator.diagnostics import BackendSmokeTestResult
 from claude_orchestrator.services.orchestrator import OrchestratorService
 from tests.helpers import build_test_orchestrator
 
@@ -93,3 +94,53 @@ def test_collect_diagnostics_includes_codex_smoke_test(monkeypatch, tmp_path):
     assert report.ok is True
     assert report.smoke_tests["codex_cli"].status == "ok"
     assert any(check.name == "codex_cli" for check in report.checks)
+
+
+def test_collect_diagnostics_warns_about_stale_legacy_codex_command_template(monkeypatch, tmp_path):
+    orchestrator = _build_orchestrator_with_codex(tmp_path)
+    orchestrator.config.backends.codex_cli.command_template = ["python", "{prompt_file}"]
+    monkeypatch.setenv(orchestrator.config.backends.messages_api.api_key_env, "test-key")
+    monkeypatch.setattr("claude_orchestrator.services.orchestrator.shutil.which", lambda executable: f"/usr/bin/{executable}")
+    monkeypatch.setattr("claude_orchestrator.services.orchestrator.validate_backend_config", lambda config: None)
+    monkeypatch.setattr(
+        orchestrator,
+        "run_codex_smoke_test",
+        lambda: BackendSmokeTestResult(
+            backend="codex_cli",
+            provider="openai",
+            ok=True,
+            status="ok",
+            summary="Codex smoke passed.",
+            details={"resolved_executable": "/usr/bin/codex"},
+            warnings=[
+                "Legacy codex_cli.command_template is still configured, but runtime jobs now ignore it unless use_legacy_command_template=true."
+            ],
+        ),
+    )
+
+    report = orchestrator.collect_diagnostics(run_smoke_tests=True)
+    codex_check = next(check for check in report.checks if check.name == "codex_cli")
+
+    assert codex_check.details["runtime_mode"] == "direct_prompt"
+    assert codex_check.details["legacy_command_template_configured"] == "true"
+    assert any("ignore it" in warning.lower() for warning in report.warnings)
+
+
+def test_codex_smoke_test_warns_when_legacy_runtime_mode_is_enabled(monkeypatch, tmp_path):
+    orchestrator = _build_orchestrator_with_codex(tmp_path)
+    orchestrator.config.backends.codex_cli.use_legacy_command_template = True
+    orchestrator.config.backends.codex_cli.command_template = ["{executable}", "{prompt_file}"]
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    def fake_run(command, **kwargs):
+        if "--version" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="codex 1.2.3\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="AI Telescreen codex smoke test OK\n", stderr="")
+
+    monkeypatch.setattr("claude_orchestrator.services.orchestrator.subprocess.run", fake_run)
+
+    result = orchestrator.run_codex_smoke_test()
+
+    assert result.ok is True
+    assert result.details["runtime_mode"] == "legacy_command_template"
+    assert any("does not validate legacy command_template runtime execution" in warning for warning in result.warnings)

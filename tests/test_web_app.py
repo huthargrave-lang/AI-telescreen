@@ -24,6 +24,74 @@ def _short_id(value: str, *, prefix: int = 8, suffix: int = 4) -> str:
     return f"{value[:prefix]}…{value[-suffix:]}"
 
 
+class _FakeCodexProcess:
+    def __init__(self, *, returncode: int = 0, stdout_chunks: list[bytes] | None = None) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+        self.pid = 5432
+        self.returncode: int | None = None
+        self._returncode = returncode
+        self._stdout_chunks = stdout_chunks or []
+        self._done = asyncio.Event()
+        self._feed_task = asyncio.create_task(self._feed())
+
+    async def _feed(self) -> None:
+        for chunk in self._stdout_chunks:
+            self.stdout.feed_data(chunk)
+        self.stdout.feed_eof()
+        self.stderr.feed_eof()
+        self.returncode = self._returncode
+        self._done.set()
+
+    async def wait(self) -> int:
+        await self._done.wait()
+        return self.returncode if self.returncode is not None else self._returncode
+
+    def terminate(self) -> None:
+        self.returncode = -15
+        self._feed_task.cancel()
+        self.stdout.feed_eof()
+        self.stderr.feed_eof()
+        self._done.set()
+
+    def kill(self) -> None:
+        self.returncode = -9
+        self._feed_task.cancel()
+        self.stdout.feed_eof()
+        self.stderr.feed_eof()
+        self._done.set()
+
+
+def _write_codex_test_config(config_path: Path, sqlite_name: str = "claude-orchestrator.db") -> None:
+    config_path.write_text(
+        "\n".join(
+            [
+                'default_backend = "codex_cli"',
+                f'workspace_root = "{config_path.parent / "workspaces"}"',
+                "",
+                "[storage]",
+                f'sqlite_path = "{sqlite_name}"',
+                "",
+                "[logging]",
+                f'json_log_path = "{config_path.parent / "logs" / "orchestrator.jsonl"}"',
+                "",
+                "[backends.codex_cli]",
+                "enabled = true",
+                'executable = "codex"',
+                "args = []",
+                'command_template = ["python", "{prompt_file}"]',
+                "timeout_seconds = 1800",
+                "smoke_test_timeout_seconds = 15",
+                'auth_mode = "auto"',
+                "use_git_worktree = false",
+                "max_output_bytes = 1048576",
+                "preview_characters = 500",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_web_app_loads_templates_outside_repo_root(tmp_path, monkeypatch):
     launch_dir = tmp_path / "launch"
     launch_dir.mkdir()
@@ -273,7 +341,10 @@ def test_web_doctor_page_and_api(tmp_path, monkeypatch):
                 details={"resolved_executable": "/usr/bin/codex"},
             )
         ],
-        warnings=["No coding-oriented backend is currently enabled."],
+        warnings=[
+            "No coding-oriented backend is currently enabled.",
+            "Legacy codex_cli.command_template is still configured, but runtime jobs now ignore it unless use_legacy_command_template=true.",
+        ],
         smoke_tests={
             "codex_cli": BackendSmokeTestResult(
                 backend="codex_cli",
@@ -282,6 +353,9 @@ def test_web_doctor_page_and_api(tmp_path, monkeypatch):
                 status="ok",
                 summary="Codex smoke passed.",
                 details={"version": "codex 1.2.3"},
+                warnings=[
+                    "Legacy codex_cli.command_template is still configured, but runtime jobs now ignore it unless use_legacy_command_template=true."
+                ],
             )
         },
     )
@@ -301,6 +375,7 @@ def test_web_doctor_page_and_api(tmp_path, monkeypatch):
     assert doctor.status_code == 200
     assert "Codex Smoke Test" in doctor.text
     assert "Codex smoke passed." in doctor.text
+    assert "runtime jobs now ignore it unless use_legacy_command_template=true" in doctor.text
     assert doctor_api.status_code == 200
     assert doctor_api.json()["smoke_tests"]["codex_cli"]["status"] == "ok"
 
@@ -418,6 +493,91 @@ def test_web_tables_render_compact_ids_and_paths(tmp_path):
     assert job_detail.status_code == 200
     assert job.id in job_detail.text
     assert "Raw job metadata" in job_detail.text
+
+
+def test_web_new_codex_job_run_now_uses_direct_runtime_even_with_stale_template(tmp_path, monkeypatch):
+    config_path = tmp_path / "claude-orchestrator.toml"
+    _write_codex_test_config(config_path)
+    captured: list[list[str]] = []
+
+    monkeypatch.setattr("shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    async def fake_exec(*args, **kwargs):
+        captured.append(list(args))
+        return _FakeCodexProcess(stdout_chunks=[b"done\n"])
+
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.asyncio.create_subprocess_exec", fake_exec)
+
+    app = build_app(root=tmp_path, config_path=config_path)
+    client = TestClient(app)
+
+    created = client.post(
+        "/jobs",
+        data={
+            "prompt": "ship fix",
+            "backend": "codex_cli",
+            "provider": "openai",
+            "task_type": "code",
+            "priority": "0",
+            "max_attempts": "3",
+        },
+        follow_redirects=False,
+    )
+    job_id = Path(urlparse(created.headers["location"]).path).name
+    run_now = client.post(f"/jobs/{job_id}/run-now", follow_redirects=False)
+    context = bootstrap(tmp_path, config_path=config_path)
+
+    assert created.status_code == 303
+    assert run_now.status_code == 303
+    assert captured[0] == ["/usr/bin/codex", "exec", "ship fix"]
+    assert context.repository.get_job(job_id).status == JobStatus.COMPLETED
+
+
+def test_web_project_launch_codex_run_now_uses_direct_runtime_even_with_stale_template(tmp_path, monkeypatch):
+    config_path = tmp_path / "claude-orchestrator.toml"
+    _write_codex_test_config(config_path, sqlite_name="project-launch.db")
+    captured: list[list[str]] = []
+
+    monkeypatch.setattr("shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    async def fake_exec(*args, **kwargs):
+        captured.append(list(args))
+        return _FakeCodexProcess(stdout_chunks=[b"done\n"])
+
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.asyncio.create_subprocess_exec", fake_exec)
+
+    app = build_app(root=tmp_path, config_path=config_path)
+    client = TestClient(app)
+
+    created_project = client.post(
+        "/projects",
+        data={
+            "name": "Codex Repo",
+            "repo_path": str(tmp_path),
+            "default_backend": "codex_cli",
+            "default_provider": "openai",
+            "default_base_branch": "main",
+            "notes": "Codex launch defaults",
+        },
+        follow_redirects=False,
+    )
+    project_id = Path(urlparse(created_project.headers["location"]).path).name
+    launch = client.post(
+        f"/projects/{project_id}/launch",
+        data={"prompt": "project launch fix", "task_type": "code", "priority": "1", "max_attempts": "4"},
+        follow_redirects=False,
+    )
+    job_id = Path(urlparse(launch.headers["location"]).path).name
+    run_now = client.post(f"/jobs/{job_id}/run-now", follow_redirects=False)
+    context = bootstrap(tmp_path, config_path=config_path)
+    launched_job = context.repository.get_job(job_id)
+
+    assert created_project.status_code == 303
+    assert launch.status_code == 303
+    assert run_now.status_code == 303
+    assert captured[0] == ["/usr/bin/codex", "exec", "project launch fix"]
+    assert launched_job.metadata["project_id"] == project_id
+    assert launched_job.status == JobStatus.COMPLETED
 
 
 def test_project_detail_renders_project_manager_summary(tmp_path):

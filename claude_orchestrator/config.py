@@ -116,6 +116,7 @@ class CodexCliBackendConfig:
     executable: str = "codex"
     args: List[str] = field(default_factory=list)
     command_template: List[str] = field(default_factory=list)
+    use_legacy_command_template: bool = False
     timeout_seconds: int = 1800
     smoke_test_timeout_seconds: int = 15
     auth_mode: str = "auto"

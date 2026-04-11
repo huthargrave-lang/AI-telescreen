@@ -83,6 +83,18 @@ def validate_backend_config(config: AppConfig) -> None:
         executable = config.backends.codex_cli.executable
         if shutil.which(executable) is None:
             errors.append(f"codex_cli executable {executable!r} is not on PATH.")
+        normalized_args = [item for item in (str(entry).strip() for entry in config.backends.codex_cli.args) if item]
+        if any(item in CodexCliBackend.MANAGED_ARGUMENTS for item in normalized_args):
+            errors.append(
+                "codex_cli args must not include workspace or prompt file flags; workspace is supplied via subprocess cwd."
+            )
+        normalized_template = [
+            item for item in (str(entry).strip() for entry in config.backends.codex_cli.command_template) if item
+        ]
+        if config.backends.codex_cli.use_legacy_command_template and not normalized_template:
+            errors.append(
+                "codex_cli use_legacy_command_template is true, but command_template is empty."
+            )
         if config.backends.codex_cli.timeout_seconds <= 0:
             errors.append("codex_cli timeout_seconds must be greater than zero.")
         if config.backends.codex_cli.smoke_test_timeout_seconds <= 0:

@@ -83,8 +83,10 @@ preview_characters = 500
 [backends.codex_cli]
 enabled = true
 executable = "codex"
-command_template = ["bash", "-lc", "codex \"$(cat \"$1\")\"", "bash", "{prompt_file}"]
+args = []
 timeout_seconds = 1800
+smoke_test_timeout_seconds = 15
 auth_mode = "auto"
 use_git_worktree = true
 max_output_bytes = 1048576
+preview_characters = 500

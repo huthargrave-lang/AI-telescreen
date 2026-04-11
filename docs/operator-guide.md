@@ -25,6 +25,7 @@
 - Automatic cleanup only targets app-created workspaces and skips dirty worktrees to avoid destroying user-visible changes.
 - `codex_cli` now relies on subprocess `cwd` for workspace context instead of passing a `--workspace` flag.
 - The preferred Codex invocation shape is `codex exec PROMPT`, with static extra args configured in `backends.codex_cli.args` when needed.
+- Legacy `codex_cli.command_template` settings are deprecated. They are ignored unless `use_legacy_command_template = true` is set explicitly.
 - The Codex smoke test uses a short read-only ephemeral `codex exec` prompt so operators can distinguish missing executables, invalid config, auth problems, and plausible runnability.
 
 ## Browser-First Operations
@@ -82,6 +83,7 @@ These actions are intentionally state-aware. Invalid actions should be hidden in
 - `claude-orchestrator doctor` exposes the same report in the terminal.
 - `claude-orchestrator smoke-test codex_cli` runs the explicit Codex smoke test on demand.
 - The doctor report includes config summary, backend checks, `git` availability, integration discovery status, and the Codex smoke-test result when applicable.
+- Doctor also warns when a legacy Codex `command_template` is still configured or explicitly enabled, because smoke-test success only validates the direct read-only smoke path.
 - The smoke test is confidence-building only. It does not guarantee that every real job prompt, repo, model, or network condition will behave the same way.
 
 ## Integration Awareness

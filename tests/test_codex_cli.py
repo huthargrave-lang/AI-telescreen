@@ -173,6 +173,70 @@ def test_codex_cli_backend_uses_exec_with_direct_prompt_invocation(monkeypatch, 
     assert any(event_type == "process_completed" for event_type, _, _ in emitted_events)
 
 
+def test_codex_cli_backend_uses_configured_args_when_present(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    config, context = _context(tmp_path)
+    config.backends.codex_cli.args = ["exec", "--json"]
+    backend = CodexCliBackend(config)
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = list(args)
+        return FakeProcess(returncode=0, stdout_chunks=[b"done\n"])
+
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.asyncio.create_subprocess_exec", fake_exec)
+
+    result = asyncio.run(backend.submit(_job(), ConversationState(job_id="codex-job", system_prompt=None), context))
+
+    assert result.status == JobStatus.COMPLETED
+    assert captured["args"] == ["/usr/bin/codex", "exec", "--json", "hello"]
+    assert result.request_payload["prompt_delivery"] == "argv"
+
+
+def test_codex_cli_backend_ignores_stale_command_template_without_opt_in(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    config, context = _context(tmp_path)
+    config.backends.codex_cli.command_template = ["python", "{prompt_file}"]
+    backend = CodexCliBackend(config)
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = list(args)
+        return FakeProcess(returncode=0, stdout_chunks=[b"done\n"])
+
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.asyncio.create_subprocess_exec", fake_exec)
+
+    result = asyncio.run(backend.submit(_job(), ConversationState(job_id="codex-job", system_prompt=None), context))
+
+    assert result.status == JobStatus.COMPLETED
+    assert captured["args"] == ["/usr/bin/codex", "exec", "hello"]
+    assert result.request_payload["command"]["mode"] == "direct_prompt"
+    assert result.request_payload["prompt_delivery"] == "argv"
+
+
+def test_codex_cli_backend_uses_legacy_command_template_only_with_explicit_opt_in(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+    config, context = _context(tmp_path)
+    config.backends.codex_cli.use_legacy_command_template = True
+    config.backends.codex_cli.command_template = ["{executable}", "exec", "--from-file", "{prompt_file}"]
+    backend = CodexCliBackend(config)
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.shutil.which", lambda executable: f"/usr/bin/{executable}")
+
+    async def fake_exec(*args, **kwargs):
+        captured["args"] = list(args)
+        return FakeProcess(returncode=0, stdout_chunks=[b"done\n"])
+
+    monkeypatch.setattr("claude_orchestrator.backends.codex_cli.asyncio.create_subprocess_exec", fake_exec)
+
+    result = asyncio.run(backend.submit(_job(), ConversationState(job_id="codex-job", system_prompt=None), context))
+
+    assert result.status == JobStatus.COMPLETED
+    assert captured["args"][:3] == ["/usr/bin/codex", "exec", "--from-file"]
+    assert captured["args"][3].endswith("codex_prompt.txt")
+    assert result.request_payload["command"]["mode"] == "legacy_command_template"
+    assert result.request_payload["prompt_delivery"] == "legacy_command_template"
+
+
 def test_codex_cli_backend_auth_failure(monkeypatch, tmp_path):
     config, context = _context(tmp_path)
     backend = CodexCliBackend(config)

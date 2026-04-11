@@ -113,8 +113,39 @@ class CodexCliBackend(BackendAdapter):
     def can_resume(self, job: Job, state: ConversationState) -> bool:
         return False
 
+    def _normalized_command_template(self) -> List[str]:
+        return [
+            item
+            for item in (str(entry).strip() for entry in self.config.backends.codex_cli.command_template)
+            if item
+        ]
+
+    def _normalized_args(self) -> List[str]:
+        return [item for item in (str(entry).strip() for entry in self.config.backends.codex_cli.args) if item]
+
+    def has_legacy_command_template_configured(self) -> bool:
+        return bool(self._normalized_command_template())
+
     def _uses_legacy_command_template(self) -> bool:
-        return bool(self.config.backends.codex_cli.command_template)
+        return (
+            self.config.backends.codex_cli.use_legacy_command_template and self.has_legacy_command_template_configured()
+        )
+
+    def codex_runtime_mode(self) -> str:
+        return "legacy_command_template" if self._uses_legacy_command_template() else "direct_prompt"
+
+    def codex_runtime_warning(self) -> Optional[str]:
+        if self._uses_legacy_command_template():
+            return (
+                "Legacy codex_cli.command_template is enabled via "
+                "use_legacy_command_template=true and overrides direct execution mode."
+            )
+        if self.has_legacy_command_template_configured():
+            return (
+                "Legacy codex_cli.command_template is still configured, but runtime jobs now ignore it unless "
+                "use_legacy_command_template=true."
+            )
+        return None
 
     def resolve_executable(self) -> str:
         backend_config = self.config.backends.codex_cli
@@ -166,7 +197,12 @@ class CodexCliBackend(BackendAdapter):
 
     def _build_legacy_command(self, *, resolved: str, workspace: Path, prompt_file: Path) -> List[str]:
         backend_config = self.config.backends.codex_cli
-        first_token = backend_config.command_template[0]
+        command_template = self._normalized_command_template()
+        if not command_template:
+            raise ConfigurationError(
+                "codex_cli.use_legacy_command_template is true, but codex_cli.command_template is empty."
+            )
+        first_token = command_template[0]
         allowed_first_tokens = {backend_config.executable, "{executable}", resolved, Path(resolved).name}
         if first_token not in allowed_first_tokens:
             raise ConfigurationError(
@@ -174,7 +210,7 @@ class CodexCliBackend(BackendAdapter):
             )
 
         command: List[str] = []
-        for item in backend_config.command_template:
+        for item in command_template:
             command.append(
                 item.format(
                     executable=resolved,
@@ -186,12 +222,12 @@ class CodexCliBackend(BackendAdapter):
         return command
 
     def _build_direct_command(self, *, resolved: str, prompt: str) -> List[str]:
-        backend_config = self.config.backends.codex_cli
-        if any(item in self.MANAGED_ARGUMENTS for item in backend_config.args):
+        args = self._normalized_args()
+        if any(item in self.MANAGED_ARGUMENTS for item in args):
             raise ConfigurationError(
                 "codex_cli.args must not include workspace or prompt file flags; workspace is provided via subprocess cwd."
             )
-        base_args = list(backend_config.args) or ["exec"]
+        base_args = args or ["exec"]
         return [resolved, *base_args, prompt]
 
     def _raise_for_failure(self, *, stderr_text: str, stdout_text: str) -> None:

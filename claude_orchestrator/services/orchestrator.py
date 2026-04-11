@@ -591,6 +591,14 @@ class OrchestratorService:
             warnings.append(
                 "The smoke test ignores configured codex_cli.args so it can stay read-only and predictable."
             )
+        runtime_warning = codex_backend.codex_runtime_warning()
+        if runtime_warning:
+            warnings.append(runtime_warning)
+        if codex_backend._uses_legacy_command_template():
+            warnings.append(
+                "Doctor uses the direct Codex smoke-test path, so a passing smoke test does not validate legacy "
+                "command_template runtime execution."
+            )
 
         version_output = ""
         try:
@@ -641,6 +649,7 @@ class OrchestratorService:
                     "resolved_executable": resolved,
                     "timeout_seconds": str(timeout_seconds),
                     "version": version_output,
+                    "runtime_mode": codex_backend.codex_runtime_mode(),
                     "stdout_preview": stdout_preview,
                     "stderr_preview": stderr_preview,
                 },
@@ -672,6 +681,7 @@ class OrchestratorService:
                     "resolved_executable": resolved,
                     "timeout_seconds": str(timeout_seconds),
                     "version": version_output,
+                    "runtime_mode": codex_backend.codex_runtime_mode(),
                     "returncode": str(completed.returncode),
                     "stdout_preview": stdout_text[:500],
                     "stderr_preview": stderr_text[:500],
@@ -689,6 +699,7 @@ class OrchestratorService:
                 "resolved_executable": resolved,
                 "timeout_seconds": str(timeout_seconds),
                 "version": version_output,
+                "runtime_mode": codex_backend.codex_runtime_mode(),
                 "stdout_preview": stdout_text[:500],
                 "stderr_preview": stderr_text[:500],
             },
@@ -858,49 +869,67 @@ class OrchestratorService:
             )
         )
 
+        codex_backend = self.backends.get("codex_cli")
+        if not isinstance(codex_backend, CodexCliBackend):
+            codex_backend = CodexCliBackend(self.config)
         codex_executable = shutil.which(self.config.backends.codex_cli.executable)
+        codex_config_valid = (
+            codex_executable is not None
+            and self.config.backends.codex_cli.timeout_seconds > 0
+            and self.config.backends.codex_cli.smoke_test_timeout_seconds > 0
+            and (
+                not self.config.backends.codex_cli.use_legacy_command_template
+                or codex_backend.has_legacy_command_template_configured()
+            )
+        )
         report.checks.append(
             DiagnosticCheck(
                 name="codex_cli",
                 ok=(
                     not self.config.backends.codex_cli.enabled
-                    or (
-                        codex_executable is not None
-                        and self.config.backends.codex_cli.timeout_seconds > 0
-                        and self.config.backends.codex_cli.smoke_test_timeout_seconds > 0
-                    )
+                    or codex_config_valid
                 ),
                 status=(
                     "disabled"
                     if not self.config.backends.codex_cli.enabled
-                    else (
-                        "configured"
-                        if codex_executable is not None
-                        and self.config.backends.codex_cli.timeout_seconds > 0
-                        and self.config.backends.codex_cli.smoke_test_timeout_seconds > 0
-                        else "invalid_config"
-                    )
+                    else ("configured" if codex_config_valid else "invalid_config")
                 ),
                 summary=(
                     "codex_cli is disabled."
                     if not self.config.backends.codex_cli.enabled
                     else (
                         "Codex CLI executable and timeout settings look valid."
-                        if codex_executable is not None
-                        and self.config.backends.codex_cli.timeout_seconds > 0
-                        and self.config.backends.codex_cli.smoke_test_timeout_seconds > 0
-                        else "Codex CLI needs an executable on PATH and positive timeout settings."
+                        if codex_config_valid
+                        else (
+                            "Codex CLI legacy mode needs a non-empty command_template in addition to an executable "
+                            "on PATH and positive timeout settings."
+                            if self.config.backends.codex_cli.use_legacy_command_template
+                            else "Codex CLI needs an executable on PATH and positive timeout settings."
+                        )
                     )
                 ),
                 details={
                     "enabled": str(self.config.backends.codex_cli.enabled).lower(),
                     "configured_executable": self.config.backends.codex_cli.executable,
                     "resolved_executable": codex_executable or "",
+                    "runtime_mode": codex_backend.codex_runtime_mode(),
+                    "use_legacy_command_template": str(
+                        self.config.backends.codex_cli.use_legacy_command_template
+                    ).lower(),
+                    "legacy_command_template_configured": str(codex_backend.has_legacy_command_template_configured()).lower(),
                     "timeout_seconds": str(self.config.backends.codex_cli.timeout_seconds),
                     "smoke_test_timeout_seconds": str(self.config.backends.codex_cli.smoke_test_timeout_seconds),
                 },
             )
         )
+        runtime_warning = codex_backend.codex_runtime_warning()
+        if runtime_warning and not (run_smoke_tests and self.config.backends.codex_cli.enabled):
+            report.warnings.append(runtime_warning)
+        if codex_backend._uses_legacy_command_template():
+            report.warnings.append(
+                "codex_cli runtime is explicitly using legacy command_template mode. Doctor smoke tests still run "
+                "through the newer direct read-only path."
+            )
 
         current_repo_path = self.root if (self.root / ".git").exists() else None
         integration_summary = self._discover_integration_summary(self.root, current_repo_path)

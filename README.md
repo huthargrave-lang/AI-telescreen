@@ -68,7 +68,7 @@ The preferred Codex path is now:
 - pass the prompt directly as the final CLI argument
 - avoid `--workspace` entirely
 
-On this machine, the installed Codex CLI exposes `codex exec [PROMPT]`, so AI Telescreen defaults to that non-interactive form when `backends.codex_cli.args` is empty. Legacy `command_template` config is still accepted for backward compatibility, but it is no longer the recommended style.
+On this machine, the installed Codex CLI exposes `codex exec [PROMPT]`, so AI Telescreen defaults to that non-interactive form when `backends.codex_cli.args` is empty. Legacy `command_template` settings are now deprecated and ignored by default. They only affect real runtime jobs when `backends.codex_cli.use_legacy_command_template = true` is set explicitly, and Doctor warns when legacy config is still present so smoke-test success cannot silently mask a runtime mismatch.
 
 AI Telescreen also includes a small Codex smoke test for confidence-building diagnostics. It resolves the configured executable, captures version output, and runs a short read-only ephemeral `codex exec` prompt with a bounded timeout so operators can quickly distinguish missing executables, bad config, likely auth problems, and plausible runnability. The smoke test is intentionally conservative: it does not prove that every real Codex job will succeed, only that the basic local invocation path appears healthy.
 
@@ -201,6 +201,7 @@ The doctor report summarizes:
 - lightweight environment checks such as `git` availability and Anthropic API env presence
 - current-workspace integration discovery status
 - the Codex smoke-test result when `codex_cli` is enabled
+- warnings when legacy Codex `command_template` settings are still present or explicitly enabled
 
 The CLI exposes the same concepts through:
 
@@ -338,6 +339,7 @@ Key settings include:
 - `backends.claude_code_cli.allow_hooks`
 - `backends.claude_code_cli.allowed_hook_executables`
 - `backends.codex_cli.args`
+- `backends.codex_cli.use_legacy_command_template`
 - `backends.codex_cli.timeout_seconds`
 - `backends.codex_cli.smoke_test_timeout_seconds`
 - `backends.codex_cli.auth_mode`
@@ -359,9 +361,10 @@ smoke_test_timeout_seconds = 15
 auth_mode = "auto"
 use_git_worktree = true
 max_output_bytes = 1048576
+preview_characters = 500
 ```
 
-`args = []` uses the backend's default non-interactive `codex exec PROMPT` behavior. If you need a custom static invocation, add fixed arguments there. Legacy `command_template` remains supported for older configs.
+`args = []` uses the backend's default non-interactive `codex exec PROMPT` behavior. If you need a custom static invocation, add fixed arguments there. Avoid `command_template` for new setups. Older configs can still opt into it with `use_legacy_command_template = true`, and AI Telescreen will warn about that mode in Doctor because the smoke test always uses the newer direct path.
 
 ## CLI Usage
 
