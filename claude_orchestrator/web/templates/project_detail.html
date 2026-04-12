@@ -33,6 +33,82 @@
     </div>
     <div class="summary-grid two" style="margin-top: 14px;">
       <div>
+        <div class="meta">Project Manager Session</div>
+        <div class="value-block">
+          <div class="stack-compact">
+            <div class="pill-row">
+              {% for badge in project_manager.session.status_badges %}
+                <span class="pill small {{ badge.class_name }}">{{ badge.label }}</span>
+              {% endfor %}
+              {% if project_manager.session.active_job_status %}
+                <span class="pill small status-pill status-{{ project_manager.session.active_job_status }}">{{ project_manager.session.active_job_status }}</span>
+              {% endif %}
+            </div>
+            <div>
+              <strong>{{ project_manager.session.headline }}</strong>
+            </div>
+            <div>{{ project_manager.session.detail }}</div>
+            <div class="summary-grid two" style="margin-top: 4px;">
+              <div>
+                <div class="meta">Mode</div>
+                <div>{{ project_manager.session.autonomy_mode_label }}</div>
+              </div>
+              <div>
+                <div class="meta">State</div>
+                <div>{{ project_manager.session.workflow_label }}</div>
+              </div>
+              <div>
+                <div class="meta">Auto tasks this session</div>
+                <div>{{ project_manager.session.auto_task_count }}</div>
+              </div>
+              <div>
+                <div class="meta">Last activity</div>
+                <div>{{ project_manager.session.last_activity_label or "n/a" }}</div>
+              </div>
+            </div>
+            {% if project_manager.session.active_job_id %}
+              <div>
+                <div class="meta">Active task</div>
+                <div class="stack-compact tight">
+                  <div>
+                    <a href="/jobs/{{ project_manager.session.active_job_id }}" title="{{ project_manager.session.active_job_id }}">
+                      <span class="mono-inline">{{ project_manager.session.active_job_short_id }}</span>
+                    </a>
+                  </div>
+                  {% if project_manager.session.active_job_headline %}
+                    <div class="meta">{{ project_manager.session.active_job_headline }}</div>
+                  {% endif %}
+                </div>
+              </div>
+            {% else %}
+              <div>
+                <div class="meta">Active task</div>
+                <div>No task in progress</div>
+              </div>
+            {% endif %}
+            {% if project_manager.session.last_completed_job_id and project_manager.session.last_completed_job_id != project_manager.session.active_job_id %}
+              <div>
+                <div class="meta">Last completed managed task</div>
+                <div>
+                  <a href="/jobs/{{ project_manager.session.last_completed_job_id }}" title="{{ project_manager.session.last_completed_job_id }}">
+                    <span class="mono-inline">{{ project_manager.session.last_completed_job_short_id }}</span>
+                  </a>
+                </div>
+              </div>
+            {% endif %}
+            {% if project_manager.session.current_recommendation %}
+              <div>
+                <div class="meta">Current recommendation</div>
+                <div>{{ project_manager.session.current_recommendation }}</div>
+              </div>
+            {% endif %}
+            {% if project_manager.session.next_prompt %}
+              <div class="meta">Next prompt: “{{ project_manager.session.next_prompt }}”</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div>
         <div class="meta">Autonomy and supervision</div>
         <div class="value-block">
           <form method="post" action="/projects/{{ project.id }}/autonomy" class="stack-compact">
@@ -54,38 +130,30 @@
               {% endif %}
             </div>
             <div class="meta">{{ project_manager.display.workflow_helper_text }}</div>
-            {% if project_manager.display.active_job_id %}
-              <div class="meta">
-                Active managed job:
-                <a href="/jobs/{{ project_manager.display.active_job_id }}" title="{{ project_manager.display.active_job_id }}">
-                  <span class="mono-inline">{{ project_manager.display.active_job_id }}</span>
-                </a>
-              </div>
-            {% endif %}
             <div class="toolbar">
               <button type="submit" class="secondary">Update autonomy</button>
             </div>
           </form>
         </div>
       </div>
-      <div>
-        <div class="meta">Compact project memory</div>
-        <div class="value-block">
-          <div>{{ project_manager.display.memory_summary }}</div>
-          {% if project_manager.display.project_guidance %}
-            <div style="margin-top: 12px;">
-              <div class="meta">Saved guidance</div>
-              <ul class="list-compact">
-                {% for item in project_manager.display.project_guidance %}
-                  <li>{{ item }}</li>
-                {% endfor %}
-              </ul>
-            </div>
-          {% endif %}
-          {% if project_manager.display.last_guidance_saved_at %}
-            <div class="meta" style="margin-top: 10px;">Last guidance saved {{ project_manager.display.last_guidance_saved_at }}</div>
-          {% endif %}
-        </div>
+    </div>
+    <div style="margin-top: 14px;">
+      <div class="meta">Compact project memory</div>
+      <div class="value-block">
+        <div>{{ project_manager.display.memory_summary }}</div>
+        {% if project_manager.display.project_guidance %}
+          <div style="margin-top: 12px;">
+            <div class="meta">Saved guidance</div>
+            <ul class="list-compact">
+              {% for item in project_manager.display.project_guidance %}
+                <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+        {% if project_manager.display.last_guidance_saved_at %}
+          <div class="meta" style="margin-top: 10px;">Last guidance saved {{ project_manager.display.last_guidance_saved_at }}</div>
+        {% endif %}
       </div>
     </div>
     {% if manager_error %}

@@ -226,6 +226,16 @@ Partial autonomy is designed to feel like a supervised project lead:
 
 Full autonomy stays bounded. It will stop for manual testing, low confidence, ambiguity, repeated failure, or the configured auto-task limit instead of looping forever.
 
+The project page now also exposes a compact Project Manager session card so operators can tell, at a glance:
+
+- whether the manager is idle, running, waiting on a worker, waiting on the operator, or paused for manual testing
+- which manager-launched task is currently relevant
+- whether that task is queued, running, completed, failed, or waiting to retry
+- how many auto-launched tasks happened in the current autonomy session
+- when the manager last had meaningful activity
+
+Manager-launched tasks still use the normal queue and worker model. When the session card says `Task queued, waiting for worker`, it means the manager already launched the task but a worker has not picked it up yet.
+
 The project page also now includes a dedicated operator-feedback panel for manual-test and browser observations. Operators can record:
 
 - `outcome` such as `passed`, `failed`, `mixed`, or `blocked`

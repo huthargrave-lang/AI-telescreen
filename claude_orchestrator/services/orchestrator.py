@@ -31,6 +31,7 @@ from ..models import (
     Job,
     JobStreamEvent,
     JobStatus,
+    ProjectManagerSessionStatus,
     RetryDisposition,
     SavedProject,
 )
@@ -570,6 +571,148 @@ class OrchestratorService:
     def get_project_manager_snapshot(self, project_id: str):
         self.repository.get_saved_project(project_id)
         return self.project_manager.get_snapshot(project_id)
+
+    def describe_project_manager_session(self, project_id: str) -> ProjectManagerSessionStatus:
+        project = self.repository.get_saved_project(project_id)
+        snapshot = self.get_project_manager_snapshot(project_id)
+        workflow_state = snapshot.state.workflow_state
+        autonomy_mode = self.project_manager._normalize_autonomy_mode(project.autonomy_mode)
+        managed_jobs = [
+            job
+            for job in self.list_project_jobs(project_id, limit=40)
+            if bool(job.metadata.get("project_manager_auto_launched"))
+        ]
+        session_id = str(snapshot.state.active_autonomy_session_id or "").strip() or None
+        session_jobs = [
+            job
+            for job in managed_jobs
+            if str(job.metadata.get("project_manager_autonomy_session_id") or "").strip() == session_id
+        ]
+        relevant_jobs = session_jobs or managed_jobs
+
+        active_job: Optional[Job] = None
+        if snapshot.state.active_job_id:
+            try:
+                candidate = self.repository.get_job(snapshot.state.active_job_id)
+            except KeyError:
+                candidate = None
+            if candidate is not None and bool(candidate.metadata.get("project_manager_auto_launched")):
+                active_job = candidate
+
+        if active_job is None and workflow_state == "running_current_task":
+            active_job = next(
+                (
+                    job
+                    for job in relevant_jobs
+                    if job.status in {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.WAITING_RETRY}
+                ),
+                None,
+            )
+
+        last_completed_job = next((job for job in relevant_jobs if job.status == JobStatus.COMPLETED), None)
+        last_failed_job = next((job for job in relevant_jobs if job.status == JobStatus.FAILED), None)
+        last_terminal_job = next(
+            (job for job in relevant_jobs if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}),
+            None,
+        )
+        displayed_job = active_job
+        if displayed_job is None and workflow_state in {"awaiting_continue_decision", "blocked_on_manual_test"}:
+            displayed_job = last_terminal_job
+
+        active_job_status = displayed_job.status.value if displayed_job else None
+        active_job_headline = self.describe_job_lifecycle(displayed_job).headline if displayed_job else None
+        waiting_on_operator = workflow_state in {"awaiting_confirmation", "awaiting_continue_decision"}
+        waiting_on_worker = workflow_state == "running_current_task" and displayed_job is not None and displayed_job.status == JobStatus.QUEUED
+        needs_manual_testing = workflow_state == "blocked_on_manual_test" or snapshot.state.needs_manual_testing
+        current_recommendation = (
+            str(snapshot.state.display_snapshot.get("conversation_reply") or "").strip()
+            or (snapshot.state.latest_response.reason if snapshot.state.latest_response else None)
+        )
+        next_prompt = str(snapshot.state.display_snapshot.get("reply_question") or "").strip() or None
+
+        if workflow_state == "running_current_task":
+            if displayed_job is None:
+                session_headline = "Task launched"
+                session_detail = "The manager started a task and is waiting for the queue state to settle."
+            elif displayed_job.status == JobStatus.QUEUED:
+                session_headline = "Task queued, waiting for worker"
+                session_detail = (
+                    "The manager already launched a task, but it is still queued. "
+                    "A worker must be active to pick it up."
+                )
+            elif displayed_job.status == JobStatus.RUNNING:
+                session_headline = "Task running"
+                session_detail = "A worker is actively processing the manager-launched task right now."
+            elif displayed_job.status == JobStatus.WAITING_RETRY:
+                session_headline = "Task waiting to retry"
+                session_detail = (
+                    "The manager-launched task hit a retryable problem and is waiting for its next attempt."
+                )
+            elif displayed_job.status == JobStatus.FAILED:
+                session_headline = "Task failed"
+                session_detail = "The last manager-launched task failed and the manager is refreshing what to do next."
+            else:
+                session_headline = "Task finished"
+                session_detail = "The latest manager-launched task finished and the manager is refreshing the project state."
+        elif workflow_state == "awaiting_continue_decision":
+            session_headline = "Waiting on your decision"
+            session_detail = (
+                "The manager finished the current supervised step and is waiting to hear whether it should keep going."
+            )
+        elif workflow_state == "blocked_on_manual_test":
+            session_headline = "Waiting for manual testing"
+            session_detail = (
+                "The manager is paused until manual verification or operator judgment clears the next step."
+            )
+        elif workflow_state == "awaiting_confirmation":
+            session_headline = "Waiting on your approval"
+            session_detail = (
+                "Minimal autonomy asks before every task."
+                if autonomy_mode == "minimal"
+                else "The manager drafted the next step and is waiting for approval before it launches more work."
+            )
+        elif relevant_jobs:
+            session_headline = "Session idle"
+            session_detail = "No manager-launched task is active right now. The last supervised session has paused."
+        else:
+            session_headline = "No task in progress"
+            session_detail = "The manager is idle. Ask it to plan the next step when you want it to act."
+
+        activity_candidates = [
+            candidate
+            for candidate in [
+                snapshot.state.last_guidance_saved_at,
+                snapshot.state.last_job_ingested_at,
+                *(message.created_at for message in snapshot.recent_messages if message.created_at),
+                *(feedback.created_at for feedback in snapshot.recent_feedback if feedback.created_at),
+                *(event.created_at for event in snapshot.recent_events if event.created_at),
+                *(job.updated_at for job in relevant_jobs[:4]),
+            ]
+            if candidate is not None
+        ]
+        last_manager_activity_at = max(activity_candidates) if activity_candidates else None
+
+        return ProjectManagerSessionStatus(
+            autonomy_mode=autonomy_mode,
+            workflow_state=workflow_state,
+            session_headline=session_headline,
+            session_detail=session_detail,
+            auto_task_count=max(snapshot.state.auto_tasks_run_count, 0),
+            waiting_on_operator=waiting_on_operator,
+            waiting_on_worker=waiting_on_worker,
+            needs_manual_testing=needs_manual_testing,
+            active_autonomy_session_id=session_id,
+            active_managed_job_id=displayed_job.id if displayed_job else None,
+            active_managed_job_status=active_job_status,
+            active_managed_job_headline=active_job_headline,
+            last_manager_activity_at=last_manager_activity_at,
+            last_completed_managed_job_id=last_completed_job.id if last_completed_job else None,
+            last_completed_managed_job_status=last_completed_job.status.value if last_completed_job else None,
+            last_failed_managed_job_id=last_failed_job.id if last_failed_job else None,
+            last_failed_managed_job_status=last_failed_job.status.value if last_failed_job else None,
+            current_recommendation=current_recommendation,
+            next_prompt=next_prompt,
+        )
 
     def compact_project_manager_state(self, project_id: str):
         self.repository.get_saved_project(project_id)

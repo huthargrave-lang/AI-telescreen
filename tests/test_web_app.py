@@ -681,7 +681,9 @@ def test_project_detail_renders_project_manager_summary(tmp_path):
     assert "Recent Changes" in detail.text
     assert "Show details" in detail.text
     assert "Autonomy and supervision" in detail.text
+    assert "Project Manager Session" in detail.text
     assert "Compact project memory" in detail.text
+    assert "No task in progress" in detail.text
     assert _short_id(job.id) in detail.text
 
 
@@ -728,6 +730,86 @@ def test_project_detail_project_manager_composer_submits_and_renders_history(tmp
     assert "Review the codebase and tell me what to do next." in submitted.text
     assert "read-only review" in submitted.text
     assert "Show details" in submitted.text
+
+
+def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_path):
+    context = bootstrap(tmp_path)
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = client.post(
+        "/projects",
+        data={
+            "name": "Queued Manager Session",
+            "repo_path": str(tmp_path),
+            "default_backend": "messages_api",
+            "default_provider": "anthropic",
+            "default_base_branch": "main",
+            "autonomy_mode": "partial",
+            "notes": "queued session coverage",
+        },
+        follow_redirects=False,
+    )
+    project_id = Path(urlparse(project.headers["location"]).path).name
+
+    submitted = client.post(
+        f"/projects/{project_id}/manager/messages",
+        data={
+            "message": "Find something to improve.",
+            "urgency": "normal",
+            "backend_preference": "messages_api",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+    auto_job = context.repository.list_project_jobs(project_id, limit=10)[0]
+
+    assert submitted.status_code == 200
+    assert "Task queued, waiting for worker" in submitted.text
+    assert "A worker must be active to pick it up." in submitted.text
+    assert _short_id(auto_job.id) in submitted.text
+    assert f'href="/jobs/{auto_job.id}"' in submitted.text
+
+
+def test_project_manager_session_shows_running_task_state(tmp_path):
+    context = bootstrap(tmp_path)
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    created_project = client.post(
+        "/projects",
+        data={
+            "name": "Running Manager Session",
+            "repo_path": str(tmp_path),
+            "default_backend": "messages_api",
+            "default_provider": "anthropic",
+            "default_base_branch": "main",
+            "autonomy_mode": "partial",
+            "notes": "running session coverage",
+        },
+        follow_redirects=False,
+    )
+    project_id = Path(urlparse(created_project.headers["location"]).path).name
+    client.post(
+        f"/projects/{project_id}/manager/messages",
+        data={
+            "message": "Find something to improve.",
+            "urgency": "normal",
+            "backend_preference": "messages_api",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+    auto_job = context.repository.list_project_jobs(project_id, limit=10)[0]
+    claimed = context.repository.claim_job(auto_job.id, "worker-running", lease_seconds=30)
+    assert claimed is not None
+
+    detail = client.get(f"/projects/{project_id}")
+
+    assert detail.status_code == 200
+    assert "Task running" in detail.text
+    assert "actively processing the manager-launched task" in detail.text
+    assert _short_id(auto_job.id) in detail.text
 
 
 def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
@@ -815,9 +897,60 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     assert submitted.status_code == 200
     assert "launched the current task" in submitted.text
     assert detail.status_code == 200
+    assert "Waiting on your decision" in detail.text
     assert "Keep Going" in detail.text
     assert "I finished the current step. Want me to keep going?" in detail.text
     assert continued.status_code == 303
+
+
+def test_project_manager_session_shows_manual_test_pause(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Manual Test Session",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="partial",
+        notes="manual-test session coverage",
+    )
+
+    client.post(
+        f"/projects/{project.id}/manager/messages",
+        data={
+            "message": "Tighten the browser layout and action badges.",
+            "urgency": "normal",
+            "backend_preference": "messages_api",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+    auto_job = context.repository.list_project_jobs(project.id, limit=10)[0]
+    asyncio.run(orchestrator.run_job_now(auto_job.id, worker_id="worker-manual-session"))
+    orchestrator.project_manager.update_workflow_state(
+        project.id,
+        workflow_state="blocked_on_manual_test",
+        active_job_id=None,
+        active_autonomy_session_id=str(auto_job.metadata.get("project_manager_autonomy_session_id") or "") or None,
+        auto_tasks_run_count=1,
+    )
+
+    detail = client.get(f"/projects/{project.id}")
+
+    assert detail.status_code == 200
+    assert "Waiting for manual testing" in detail.text
+    assert "manual test needed" in detail.text
+    assert _short_id(auto_job.id) in detail.text
 
 
 def test_project_manager_launch_task_from_interactive_response(tmp_path):

@@ -64,6 +64,11 @@
   - `minimal`: asks before every task and never auto-enqueues work
   - `partial`: runs the current supervised step, reports back, then asks whether it should keep going
   - `full`: keeps iterating until it hits a stop condition such as manual testing, low confidence, ambiguity, repeated failure, or the task limit
+- The top of the project page now includes a compact Project Manager session card.
+- That card shows whether the manager is idle, has a queued task waiting for a worker, is actively running a task, is waiting on the operator, or is paused for manual testing.
+- Manager-launched tasks still use the same queue and worker model as every other job. `Waiting on worker` means the manager already queued the task, but no worker has picked it up yet.
+- `Waiting on operator` means the manager finished the current supervised step or needs approval before it continues.
+- In partial autonomy, the normal rhythm is: launch one task, report back, then show `Keep Going` while waiting on the operator.
 - The default manager reply now reads like a concise technical lead instead of a raw schema renderer.
 - The primary project-page actions are human-first: `Run it`, `Edit`, `Ask Follow-up`, `Keep Going`, and `Store as Project Guidance`.
 - Raw decision labels, confidence, full draft prompts, and rationale are still available, but they live behind `Show details` instead of dominating the page.

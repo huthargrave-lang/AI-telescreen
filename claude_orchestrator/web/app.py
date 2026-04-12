@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
@@ -98,6 +99,15 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         if len(text) <= limit:
             return text
         return f"{text[: limit - 1].rstrip()}…"
+
+    def _format_timestamp(value: Optional[datetime]) -> Optional[str]:
+        if value is None:
+            return None
+        try:
+            localized = value.astimezone()
+        except ValueError:
+            localized = value
+        return localized.strftime("%Y-%m-%d %I:%M:%S %p")
 
     def _short_path(value: Optional[str], *, keep_parts: int = 3, limit: int = 48) -> Optional[str]:
         if not value:
@@ -285,6 +295,62 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 }
                 for feedback in snapshot.recent_feedback
             ],
+        }
+
+    def serialize_project_manager_session(session) -> dict:
+        badges = [
+            {"label": session.autonomy_mode.title(), "class_name": ""},
+        ]
+        state_badges: list[dict[str, str]] = []
+        if session.waiting_on_worker:
+            state_badges.append({"label": "waiting on worker", "class_name": "status-pill status-queued"})
+        elif session.active_managed_job_status == JobStatus.RUNNING.value:
+            state_badges.append({"label": "running", "class_name": "status-pill status-running"})
+        elif session.workflow_state == "awaiting_continue_decision":
+            state_badges.append({"label": "waiting on operator", "class_name": "status-pill status-waiting_retry"})
+        elif session.workflow_state == "blocked_on_manual_test":
+            state_badges.append({"label": "manual test needed", "class_name": "status-pill status-waiting_retry"})
+        elif session.active_managed_job_status == JobStatus.WAITING_RETRY.value:
+            state_badges.append({"label": "waiting to retry", "class_name": "status-pill status-waiting_retry"})
+        elif session.active_managed_job_status == JobStatus.FAILED.value:
+            state_badges.append({"label": "failed", "class_name": "status-pill status-failed"})
+        elif session.active_managed_job_status == JobStatus.COMPLETED.value:
+            state_badges.append({"label": "completed", "class_name": "status-pill status-completed"})
+        elif session.workflow_state == "idle":
+            state_badges.append({"label": "idle", "class_name": ""})
+        elif session.workflow_state == "awaiting_confirmation":
+            state_badges.append({"label": "waiting on approval", "class_name": "status-pill status-waiting_retry"})
+        else:
+            state_badges.append({"label": _humanize_label(session.workflow_state) or "session", "class_name": ""})
+        badges.extend(state_badges)
+
+        return {
+            "autonomy_mode": session.autonomy_mode,
+            "autonomy_mode_label": session.autonomy_mode.title(),
+            "workflow_state": session.workflow_state,
+            "workflow_label": _humanize_label(session.workflow_state) or session.workflow_state,
+            "headline": session.session_headline,
+            "detail": session.session_detail,
+            "auto_task_count": session.auto_task_count,
+            "waiting_on_operator": session.waiting_on_operator,
+            "waiting_on_worker": session.waiting_on_worker,
+            "needs_manual_testing": session.needs_manual_testing,
+            "active_job_id": session.active_managed_job_id,
+            "active_job_short_id": _short_id(session.active_managed_job_id) if session.active_managed_job_id else None,
+            "active_job_status": session.active_managed_job_status,
+            "active_job_status_label": _humanize_label(session.active_managed_job_status),
+            "active_job_headline": session.active_managed_job_headline,
+            "last_activity_at": session.last_manager_activity_at.isoformat() if session.last_manager_activity_at else None,
+            "last_activity_label": _format_timestamp(session.last_manager_activity_at),
+            "last_completed_job_id": session.last_completed_managed_job_id,
+            "last_completed_job_short_id": _short_id(session.last_completed_managed_job_id) if session.last_completed_managed_job_id else None,
+            "last_completed_job_status": session.last_completed_managed_job_status,
+            "last_failed_job_id": session.last_failed_managed_job_id,
+            "last_failed_job_short_id": _short_id(session.last_failed_managed_job_id) if session.last_failed_managed_job_id else None,
+            "last_failed_job_status": session.last_failed_managed_job_status,
+            "current_recommendation": _truncate_text(session.current_recommendation, limit=180) or None,
+            "next_prompt": _truncate_text(session.next_prompt, limit=160) or None,
+            "status_badges": badges[:4],
         }
 
     def _job_detail_context(request: Request, job_id: str) -> dict:
@@ -552,6 +618,9 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         jobs = [serialize_job(job) for job in orchestrator.list_project_jobs(project_id, limit=20)]
         integration_summary = orchestrator.get_project_integration_summary(project_id)
         project_manager = serialize_project_manager(orchestrator.get_project_manager_snapshot(project_id))
+        project_manager["session"] = serialize_project_manager_session(
+            orchestrator.describe_project_manager_session(project_id)
+        )
         return {
             "request": request,
             "project": project,

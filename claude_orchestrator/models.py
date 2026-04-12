@@ -420,3 +420,26 @@ class ProjectManagerSnapshot:
     recent_events: List[ProjectManagerEvent] = field(default_factory=list)
     recent_messages: List[ProjectManagerMessage] = field(default_factory=list)
     recent_feedback: List[ProjectOperatorFeedback] = field(default_factory=list)
+
+
+@dataclass
+class ProjectManagerSessionStatus:
+    autonomy_mode: str
+    workflow_state: str
+    session_headline: str
+    session_detail: str
+    auto_task_count: int = 0
+    waiting_on_operator: bool = False
+    waiting_on_worker: bool = False
+    needs_manual_testing: bool = False
+    active_autonomy_session_id: Optional[str] = None
+    active_managed_job_id: Optional[str] = None
+    active_managed_job_status: Optional[str] = None
+    active_managed_job_headline: Optional[str] = None
+    last_manager_activity_at: Optional[datetime] = None
+    last_completed_managed_job_id: Optional[str] = None
+    last_completed_managed_job_status: Optional[str] = None
+    last_failed_managed_job_id: Optional[str] = None
+    last_failed_managed_job_status: Optional[str] = None
+    current_recommendation: Optional[str] = None
+    next_prompt: Optional[str] = None
