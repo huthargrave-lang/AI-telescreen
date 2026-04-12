@@ -171,6 +171,8 @@ class LeaseHeartbeat:
 class OrchestratorService:
     """Coordinates persistence, retries, recovery, and backend execution."""
 
+    PROJECT_MANAGER_FULL_AUTONOMY_LIMIT = 3
+
     def __init__(
         self,
         root: Path,
@@ -302,6 +304,7 @@ class OrchestratorService:
         default_base_branch: Optional[str] = None,
         default_use_git_worktree: bool = False,
         notes: Optional[str] = None,
+        autonomy_mode: str = "minimal",
     ) -> SavedProject:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
@@ -314,6 +317,7 @@ class OrchestratorService:
             default_base_branch=default_base_branch,
             default_use_git_worktree=default_use_git_worktree,
             notes=notes,
+            autonomy_mode=autonomy_mode,
         )
         self.project_manager.sync_project(project.id)
         return project
@@ -329,6 +333,7 @@ class OrchestratorService:
         default_base_branch: Optional[str] = None,
         default_use_git_worktree: bool = False,
         notes: Optional[str] = None,
+        autonomy_mode: str = "minimal",
     ) -> SavedProject:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
@@ -342,9 +347,24 @@ class OrchestratorService:
             default_base_branch=default_base_branch,
             default_use_git_worktree=default_use_git_worktree,
             notes=notes,
+            autonomy_mode=autonomy_mode,
         )
         self.project_manager.sync_project(project.id)
         return project
+
+    def set_project_autonomy_mode(self, project_id: str, autonomy_mode: str) -> SavedProject:
+        project = self.repository.get_saved_project(project_id)
+        return self.update_saved_project(
+            project_id,
+            name=project.name,
+            repo_path=project.repo_path,
+            default_backend=project.default_backend,
+            default_provider=project.default_provider,
+            default_base_branch=project.default_base_branch,
+            default_use_git_worktree=project.default_use_git_worktree,
+            notes=project.notes,
+            autonomy_mode=autonomy_mode,
+        )
 
     def launch_job_from_project(
         self,
@@ -564,18 +584,55 @@ class OrchestratorService:
         backend_preference: Optional[str] = None,
         execution_mode: Optional[str] = None,
     ):
-        self.repository.get_saved_project(project_id)
-        return self.project_manager.submit_project_manager_message(
+        project = self.repository.get_saved_project(project_id)
+        snapshot = self.project_manager.submit_project_manager_message(
             project_id,
             message,
             urgency=urgency,
             backend_preference=backend_preference,
             execution_mode=execution_mode,
         )
+        return self._progress_project_manager_autonomy(
+            project,
+            snapshot,
+            trigger="message",
+        )
 
     def save_project_manager_advisory(self, project_id: str):
         self.repository.get_saved_project(project_id)
         return self.project_manager.save_project_manager_advisory(project_id)
+
+    def continue_project_manager_autonomy(self, project_id: str):
+        project = self.repository.get_saved_project(project_id)
+        snapshot = self.get_project_manager_snapshot(project_id)
+        return self._progress_project_manager_autonomy(
+            project,
+            snapshot,
+            trigger="continue",
+            require_draft=True,
+        )
+
+    def submit_project_operator_feedback(
+        self,
+        project_id: str,
+        *,
+        outcome: str,
+        notes: str,
+        severity: Optional[str] = None,
+        area: Optional[str] = None,
+        screenshot_reference: Optional[str] = None,
+        requires_followup: bool = False,
+    ):
+        self.repository.get_saved_project(project_id)
+        return self.project_manager.submit_operator_feedback(
+            project_id,
+            outcome=outcome,
+            notes=notes,
+            severity=severity,
+            area=area,
+            screenshot_reference=screenshot_reference,
+            requires_followup=requires_followup,
+        )
 
     def launch_job_from_project_manager_draft(
         self,
@@ -1452,18 +1509,159 @@ class OrchestratorService:
         error_reason: Optional[str] = None,
     ) -> None:
         try:
-            self.project_manager.ingest_job_outcome(
+            snapshot = self.project_manager.ingest_job_outcome(
                 job_id,
                 response_summary=response_summary,
                 needs_followup=needs_followup,
                 followup_reason=followup_reason,
                 error_reason=error_reason,
             )
+            if snapshot is None:
+                return
+            job = self.repository.get_job(job_id)
+            project_id = str(job.metadata.get("project_id") or "").strip()
+            if not project_id:
+                return
+            project = self.repository.get_saved_project(project_id)
+            autonomy_mode = self.project_manager._normalize_autonomy_mode(project.autonomy_mode)
+            session_id = str(job.metadata.get("project_manager_autonomy_session_id") or "").strip() or snapshot.state.active_autonomy_session_id
+            if not bool(job.metadata.get("project_manager_auto_launched")):
+                return
+            if autonomy_mode == "partial":
+                self.project_manager.update_workflow_state(
+                    project_id,
+                    workflow_state=(
+                        "blocked_on_manual_test"
+                        if snapshot.state.needs_manual_testing
+                        else "awaiting_continue_decision"
+                    ),
+                    active_job_id=None,
+                    active_autonomy_session_id=session_id or None,
+                    auto_tasks_run_count=max(snapshot.state.auto_tasks_run_count, 1),
+                )
+                return
+            if autonomy_mode == "full":
+                refreshed = self.project_manager.update_workflow_state(
+                    project_id,
+                    workflow_state="idle",
+                    active_job_id=None,
+                    active_autonomy_session_id=session_id or None,
+                    auto_tasks_run_count=max(snapshot.state.auto_tasks_run_count, 1),
+                )
+                self._progress_project_manager_autonomy(
+                    project,
+                    refreshed,
+                    trigger="outcome",
+                    session_id=session_id or None,
+                )
         except Exception:
             logger.exception(
                 "project_manager.ingest_failed",
                 extra={"context": {"job_id": job_id}},
             )
+
+    def _progress_project_manager_autonomy(
+        self,
+        project: SavedProject,
+        snapshot,
+        *,
+        trigger: str,
+        require_draft: bool = False,
+        session_id: Optional[str] = None,
+    ):
+        response = snapshot.state.latest_response
+        autonomy_mode = self.project_manager._normalize_autonomy_mode(project.autonomy_mode)
+        if response is None:
+            return snapshot
+        if require_draft and (response.decision != "launch_followup_job" or response.draft_task is None):
+            raise ValueError("This project does not currently have a recommended task ready to continue.")
+        if response.needs_manual_testing or response.decision == "request_manual_test":
+            return self.project_manager.update_workflow_state(
+                project.id,
+                workflow_state="blocked_on_manual_test",
+                active_job_id=None,
+                active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+            )
+        if response.decision != "launch_followup_job" or response.draft_task is None:
+            fallback_state = "awaiting_continue_decision" if autonomy_mode == "partial" and trigger == "outcome" else "idle"
+            return self.project_manager.update_workflow_state(
+                project.id,
+                workflow_state=fallback_state,
+                active_job_id=None,
+                active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+            )
+        if autonomy_mode == "minimal":
+            return self.project_manager.update_workflow_state(
+                project.id,
+                workflow_state="awaiting_confirmation",
+                active_job_id=None,
+                active_autonomy_session_id=None,
+                auto_tasks_run_count=0,
+            )
+        if response.confidence == "low" or response.phase == "blocked":
+            return self.project_manager.update_workflow_state(
+                project.id,
+                workflow_state="awaiting_confirmation",
+                active_job_id=None,
+                active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+            )
+        if autonomy_mode == "partial" and trigger not in {"message", "continue"}:
+            return self.project_manager.update_workflow_state(
+                project.id,
+                workflow_state="awaiting_continue_decision",
+                active_job_id=None,
+                active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                auto_tasks_run_count=max(snapshot.state.auto_tasks_run_count, 1),
+            )
+        if autonomy_mode == "full":
+            recent_failed = sum(1 for event in snapshot.recent_events[:2] if event.outcome_status == JobStatus.FAILED.value)
+            if recent_failed >= 2 or snapshot.state.auto_tasks_run_count >= self.PROJECT_MANAGER_FULL_AUTONOMY_LIMIT:
+                return self.project_manager.update_workflow_state(
+                    project.id,
+                    workflow_state="awaiting_confirmation",
+                    active_job_id=None,
+                active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+            )
+        if trigger == "message":
+            active_session_id = str(uuid.uuid4())
+            next_count = 1
+        else:
+            active_session_id = session_id or snapshot.state.active_autonomy_session_id or str(uuid.uuid4())
+            next_count = max(snapshot.state.auto_tasks_run_count, 0) + 1
+        draft = response.draft_task
+        job = self.launch_job_from_project(
+            project.id,
+            prompt=draft.prompt,
+            task_type=draft.task_type,
+            priority=draft.priority,
+            backend=draft.backend,
+            provider=draft.provider,
+            use_git_worktree=draft.use_git_worktree,
+            base_branch=draft.base_branch,
+            extra_metadata=self._sanitize_enqueue_metadata(
+                {
+                    "execution_mode": draft.execution_mode,
+                    "project_manager_decision": response.decision,
+                    "project_manager_reason": response.reason,
+                    "project_manager_derived_from_operator_message": draft.derived_from_operator_message,
+                    "project_manager_auto_launched": True,
+                    "project_manager_autonomy_mode": autonomy_mode,
+                    "project_manager_autonomy_session_id": active_session_id,
+                    "project_manager_autonomy_trigger": trigger,
+                }
+            ),
+        )
+        return self.project_manager.update_workflow_state(
+            project.id,
+            workflow_state="running_current_task",
+            active_job_id=job.id,
+            active_autonomy_session_id=active_session_id,
+            auto_tasks_run_count=next_count,
+        )
 
     def _persist_success(
         self,

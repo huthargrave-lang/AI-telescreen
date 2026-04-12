@@ -8,8 +8,9 @@ import pytest
 
 from claude_orchestrator.bootstrap import bootstrap
 from claude_orchestrator.diagnostics import BackendSmokeTestResult, DiagnosticCheck, DiagnosticsReport
-from claude_orchestrator.models import EnqueueJobRequest, JobStatus, RetryDecision, RetryDisposition
+from claude_orchestrator.models import BackendResult, ConversationState, EnqueueJobRequest, JobStatus, RetryDecision, RetryDisposition
 from claude_orchestrator.services.orchestrator import OrchestratorService
+from claude_orchestrator.timeutils import utcnow
 from claude_orchestrator.web.app import build_app
 from tests.helpers import CompletedBackend
 
@@ -76,6 +77,44 @@ class _FailingManagerBackend:
             disposition=RetryDisposition.FAIL,
             reason="ui_regression_detected",
             error_code="ui_regression_detected",
+            error_message=str(error),
+        )
+
+    def can_resume(self, job, state):
+        return False
+
+
+class _FollowupManagerBackend:
+    name = "messages_api"
+
+    async def submit(self, job, state, context):
+        updated_state = ConversationState(
+            job_id=job.id,
+            system_prompt=state.system_prompt,
+            message_history=state.message_history + [{"role": "assistant", "content": "implemented follow-up step"}],
+            compact_summary="implemented follow-up step",
+            tool_context=dict(state.tool_context),
+            last_checkpoint_at=utcnow(),
+        )
+        return BackendResult(
+            status=JobStatus.COMPLETED,
+            output="implemented follow-up step",
+            updated_state=updated_state,
+            request_payload={"job_id": job.id},
+            response_summary={"summary": "implemented one focused project step"},
+            needs_followup=True,
+            followup_reason="The next likely cleanup is the job action area.",
+            exit_reason="completed",
+        )
+
+    async def continue_job(self, job, state, context):
+        return await self.submit(job, state, context)
+
+    def classify_error(self, error, headers=None):
+        return RetryDecision(
+            disposition=RetryDisposition.FAIL,
+            reason="followup_backend_error",
+            error_code="followup_backend_error",
             error_message=str(error),
         )
 
@@ -414,6 +453,7 @@ def test_web_project_edit_and_recent_launch_history(tmp_path):
             "default_backend": "messages_api",
             "default_provider": "anthropic",
             "default_base_branch": "main",
+            "autonomy_mode": "partial",
             "notes": "before edit",
         },
         follow_redirects=False,
@@ -428,6 +468,7 @@ def test_web_project_edit_and_recent_launch_history(tmp_path):
             "default_backend": "messages_api",
             "default_provider": "anthropic",
             "default_base_branch": "release",
+            "autonomy_mode": "full",
             "notes": "after edit",
         },
         follow_redirects=False,
@@ -446,10 +487,12 @@ def test_web_project_edit_and_recent_launch_history(tmp_path):
     assert project.name == "Main Repo Edited"
     assert project.default_base_branch == "release"
     assert project.default_use_git_worktree is False
+    assert project.autonomy_mode == "full"
     assert "Recent Launches" in detail.text
     assert _short_id(launched_job_id) in detail.text
     assert f'title="{launched_job_id}"' in detail.text
     assert "Edit Project" in detail.text
+    assert "Project Manager autonomy" in detail.text
 
 
 def test_web_tables_render_compact_ids_and_paths(tmp_path):
@@ -632,11 +675,13 @@ def test_project_detail_renders_project_manager_summary(tmp_path):
 
     assert detail.status_code == 200
     assert "Project Manager" in detail.text
-    assert "request_manual_test" in detail.text
+    assert "Pause for manual verification" in detail.text
     assert "manual testing needed" in detail.text
     assert "Manual Test Checklist" in detail.text
     assert "Recent Changes" in detail.text
-    assert "Active Focus" in detail.text
+    assert "Show details" in detail.text
+    assert "Autonomy and supervision" in detail.text
+    assert "Compact project memory" in detail.text
     assert _short_id(job.id) in detail.text
 
 
@@ -677,10 +722,12 @@ def test_project_detail_project_manager_composer_submits_and_renders_history(tmp
     assert "Talk to Project Manager" in detail.text
     assert "Ask Project Manager" in detail.text
     assert submitted.status_code == 200
-    assert "Save as Advisory Context" in submitted.text
+    assert "Store as Project Guidance" in submitted.text
     assert "Recent Project Manager Conversation" in submitted.text
-    assert "Launch Task" in submitted.text
+    assert "Run it" in submitted.text
     assert "Review the codebase and tell me what to do next." in submitted.text
+    assert "read-only review" in submitted.text
+    assert "Show details" in submitted.text
 
 
 def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
@@ -723,8 +770,54 @@ def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
     assert followup.status_code == 200
     assert "Continue the current AI Telescreen project-manager discussion" in followup.text
     assert advisory.status_code == 200
-    assert "Saved the latest Project Manager guidance as advisory context." in advisory.text
-    assert "advisory saved" in advisory.text
+    assert "Stored the latest recommendation as project guidance for future manager decisions." in advisory.text
+    assert "guidance saved" in advisory.text
+    assert "compact memory" in advisory.text
+
+
+def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": _FollowupManagerBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Partial Manager Flow",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="partial",
+        notes="partial autonomy browser flow",
+    )
+
+    submitted = client.post(
+        f"/projects/{project.id}/manager/messages",
+        data={
+            "message": "Find something to improve.",
+            "urgency": "normal",
+            "backend_preference": "messages_api",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+    auto_job = context.repository.list_project_jobs(project.id, limit=10)[0]
+    asyncio.run(orchestrator.run_job_now(auto_job.id, worker_id="worker-partial-browser"))
+    detail = client.get(f"/projects/{project.id}")
+    continued = client.post(f"/projects/{project.id}/manager/continue", follow_redirects=False)
+
+    assert submitted.status_code == 200
+    assert "launched the current task" in submitted.text
+    assert detail.status_code == 200
+    assert "Keep Going" in detail.text
+    assert "I finished the current step. Want me to keep going?" in detail.text
+    assert continued.status_code == 303
 
 
 def test_project_manager_launch_task_from_interactive_response(tmp_path):
@@ -764,11 +857,89 @@ def test_project_manager_launch_task_from_interactive_response(tmp_path):
     launched_job = context.repository.get_job(launched_job_id)
 
     assert new_job.status_code == 200
-    assert "Project Manager draft" in new_job.text
-    assert "Focus on the wasted space in this page." in new_job.text
+    assert "Recommended task draft" in new_job.text
+    assert "Goal:" in new_job.text
+    assert "Output style:" in new_job.text
     assert launched.status_code == 303
     assert launched_job.metadata["project_id"] == project.id
     assert launched_job.metadata["execution_mode"] == "safe_changes"
+
+
+def test_project_feedback_submission_renders_recent_feedback_and_updates_recommendation(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Feedback Browser",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="feedback browser coverage",
+    )
+
+    submitted = client.post(
+        f"/projects/{project.id}/feedback",
+        data={
+            "outcome": "failed",
+            "notes": "Run Now worked, but the project page still wastes space around the manager cards.",
+            "severity": "high",
+            "area": "project-manager",
+            "screenshot_reference": "/tmp/project-page-gap.png",
+            "requires_followup": "on",
+        },
+        follow_redirects=True,
+    )
+
+    assert submitted.status_code == 200
+    assert "Operator Feedback" in submitted.text
+    assert "reacting to operator feedback" in submitted.text
+    assert "project-page-gap.png" in submitted.text
+    assert "follow-up requested" in submitted.text
+    assert "Run it" in submitted.text
+
+
+def test_project_feedback_validation_error_renders_cleanly(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Feedback Validation",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="validation coverage",
+    )
+
+    submitted = client.post(
+        f"/projects/{project.id}/feedback",
+        data={
+            "outcome": "mixed",
+            "notes": "",
+            "severity": "normal",
+        },
+        follow_redirects=True,
+    )
+
+    assert submitted.status_code == 400
+    assert "Operator feedback notes are required." in submitted.text
 
 
 def test_project_manager_draft_prefills_new_job_form_and_launches(tmp_path):
@@ -804,9 +975,9 @@ def test_project_manager_draft_prefills_new_job_form_and_launches(tmp_path):
     launched_job = context.repository.get_job(launched_job_id)
 
     assert new_job.status_code == 200
-    assert "Project Manager draft" in new_job.text
+    assert "Recommended task draft" in new_job.text
     assert "UI smoke test is still failing" in new_job.text
-    assert "execution_mode" in new_job.text
+    assert "Output style:" in new_job.text
     assert launched.status_code == 303
     assert launched_job.prompt != ""
     assert launched_job.metadata["project_id"] == project.id

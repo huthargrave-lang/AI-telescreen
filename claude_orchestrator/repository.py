@@ -24,6 +24,7 @@ from .models import (
     ProjectManagerResponse,
     ProjectManagerSnapshot,
     ProjectManagerState,
+    ProjectOperatorFeedback,
     ProviderName,
     SavedProject,
     SchedulerEventRecord,
@@ -302,6 +303,7 @@ class JobRepository:
         default_base_branch: Optional[str],
         default_use_git_worktree: bool,
         notes: Optional[str],
+        autonomy_mode: str = "minimal",
     ) -> SavedProject:
         project_id = str(uuid.uuid4())
         now = utcnow()
@@ -317,9 +319,10 @@ class JobRepository:
                     default_base_branch,
                     default_use_git_worktree,
                     notes,
+                    autonomy_mode,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     project_id,
@@ -330,6 +333,7 @@ class JobRepository:
                     default_base_branch,
                     1 if default_use_git_worktree else 0,
                     notes,
+                    autonomy_mode,
                     to_iso8601(now),
                     to_iso8601(now),
                 ),
@@ -367,6 +371,7 @@ class JobRepository:
         default_base_branch: Optional[str],
         default_use_git_worktree: bool,
         notes: Optional[str],
+        autonomy_mode: str = "minimal",
     ) -> SavedProject:
         now = utcnow()
         with self.db.connect() as connection:
@@ -381,6 +386,7 @@ class JobRepository:
                     default_base_branch = ?,
                     default_use_git_worktree = ?,
                     notes = ?,
+                    autonomy_mode = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -392,6 +398,7 @@ class JobRepository:
                     default_base_branch,
                     1 if default_use_git_worktree else 0,
                     notes,
+                    autonomy_mode,
                     to_iso8601(now),
                     project_id,
                 ),
@@ -454,11 +461,17 @@ class JobRepository:
                     latest_recommendation_type,
                     latest_recommendation_reason,
                     latest_recommendation_json,
+                    workflow_state,
+                    active_autonomy_session_id,
+                    active_job_id,
+                    auto_tasks_run_count,
+                    project_guidance_json,
+                    last_guidance_saved_at,
                     last_job_ingested_at,
                     last_compacted_at,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(project_id) DO UPDATE SET
                     current_phase = excluded.current_phase,
                     summary = excluded.summary,
@@ -472,6 +485,12 @@ class JobRepository:
                     latest_recommendation_type = excluded.latest_recommendation_type,
                     latest_recommendation_reason = excluded.latest_recommendation_reason,
                     latest_recommendation_json = excluded.latest_recommendation_json,
+                    workflow_state = excluded.workflow_state,
+                    active_autonomy_session_id = excluded.active_autonomy_session_id,
+                    active_job_id = excluded.active_job_id,
+                    auto_tasks_run_count = excluded.auto_tasks_run_count,
+                    project_guidance_json = excluded.project_guidance_json,
+                    last_guidance_saved_at = excluded.last_guidance_saved_at,
                     last_job_ingested_at = excluded.last_job_ingested_at,
                     last_compacted_at = excluded.last_compacted_at,
                     updated_at = excluded.updated_at
@@ -490,6 +509,12 @@ class JobRepository:
                     state.latest_recommendation_type,
                     state.latest_recommendation_reason,
                     latest_recommendation_json,
+                    state.workflow_state,
+                    state.active_autonomy_session_id,
+                    state.active_job_id,
+                    int(state.auto_tasks_run_count),
+                    _dumps(state.project_guidance),
+                    to_iso8601(state.last_guidance_saved_at),
                     to_iso8601(state.last_job_ingested_at),
                     to_iso8601(state.last_compacted_at),
                     to_iso8601(created_at),
@@ -584,6 +609,73 @@ class JobRepository:
                   AND id IN ({placeholders})
                 """,
                 (project_id, *message_ids),
+            )
+        return deleted.rowcount
+
+    def add_project_operator_feedback(self, feedback: ProjectOperatorFeedback) -> bool:
+        with self.db.connect() as connection:
+            inserted = connection.execute(
+                """
+                INSERT OR IGNORE INTO project_operator_feedback (
+                    id,
+                    project_id,
+                    outcome,
+                    severity,
+                    area,
+                    notes,
+                    screenshot_reference,
+                    requires_followup,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    feedback.id,
+                    feedback.project_id,
+                    feedback.outcome,
+                    feedback.severity,
+                    feedback.area,
+                    feedback.notes,
+                    feedback.screenshot_reference,
+                    1 if feedback.requires_followup else 0,
+                    to_iso8601(feedback.created_at),
+                ),
+            )
+        return inserted.rowcount == 1
+
+    def list_project_operator_feedback(
+        self,
+        project_id: str,
+        *,
+        limit: Optional[int] = 12,
+    ) -> List[ProjectOperatorFeedback]:
+        limit_clause = "LIMIT ?" if limit is not None else ""
+        params: List[Any] = [project_id]
+        if limit is not None:
+            params.append(limit)
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM project_operator_feedback
+                WHERE project_id = ?
+                ORDER BY created_at DESC
+                {limit_clause}
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._row_to_project_operator_feedback(row) for row in rows]
+
+    def delete_project_operator_feedback(self, project_id: str, feedback_ids: Sequence[str]) -> int:
+        if not feedback_ids:
+            return 0
+        placeholders = ",".join("?" for _ in feedback_ids)
+        with self.db.connect() as connection:
+            deleted = connection.execute(
+                f"""
+                DELETE FROM project_operator_feedback
+                WHERE project_id = ?
+                  AND id IN ({placeholders})
+                """,
+                (project_id, *feedback_ids),
             )
         return deleted.rowcount
 
@@ -1529,6 +1621,7 @@ class JobRepository:
             notes=row["notes"],
             created_at=from_iso8601(row["created_at"]) or utcnow(),
             updated_at=from_iso8601(row["updated_at"]) or utcnow(),
+            autonomy_mode=row["autonomy_mode"] or "minimal",
         )
 
     def _row_to_project_manager_state(self, row: Any) -> ProjectManagerState:
@@ -1554,6 +1647,12 @@ class JobRepository:
             ),
             latest_recommendation_type=row["latest_recommendation_type"],
             latest_recommendation_reason=row["latest_recommendation_reason"],
+            workflow_state=row["workflow_state"] or "idle",
+            active_autonomy_session_id=row["active_autonomy_session_id"],
+            active_job_id=row["active_job_id"],
+            auto_tasks_run_count=int(row["auto_tasks_run_count"] or 0),
+            project_guidance=_loads_list(row["project_guidance_json"]),
+            last_guidance_saved_at=from_iso8601(row["last_guidance_saved_at"]),
             last_job_ingested_at=from_iso8601(row["last_job_ingested_at"]),
             last_compacted_at=from_iso8601(row["last_compacted_at"]),
             created_at=from_iso8601(row["created_at"]),
@@ -1579,6 +1678,19 @@ class JobRepository:
             role=row["role"],
             content=row["content"],
             metadata=_loads(row["metadata_json"]),
+            created_at=from_iso8601(row["created_at"]),
+        )
+
+    def _row_to_project_operator_feedback(self, row: Any) -> ProjectOperatorFeedback:
+        return ProjectOperatorFeedback(
+            id=row["id"],
+            project_id=row["project_id"],
+            outcome=row["outcome"],
+            notes=row["notes"],
+            severity=row["severity"],
+            area=row["area"],
+            screenshot_reference=row["screenshot_reference"],
+            requires_followup=bool(row["requires_followup"]),
             created_at=from_iso8601(row["created_at"]),
         )
 

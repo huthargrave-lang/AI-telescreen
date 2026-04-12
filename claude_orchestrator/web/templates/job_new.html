@@ -86,7 +86,13 @@
       {% if manager_context %}
         <div class="full panel" style="margin: 0; padding: 14px;">
           <div class="pill-row" style="margin-bottom: 8px;">
-            <span class="pill small">Project Manager {{ manager_context.mode }}</span>
+            <span class="pill small">
+              {% if manager_context.mode == "draft" %}
+                Recommended task draft
+              {% else %}
+                Project Manager follow-up
+              {% endif %}
+            </span>
             {% if manager_context.execution_mode %}
               <span class="pill small">{{ manager_context.execution_mode }}</span>
             {% endif %}

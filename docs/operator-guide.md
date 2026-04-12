@@ -51,18 +51,31 @@
 
 - Every saved project now has a compact durable project-manager state.
 - The manager ingests completed and failed project-linked jobs and keeps a rolling summary of what has happened.
-- It tracks current phase, manual-testing status, recent important outcomes, and the latest structured manager response.
-- Recommendations are advisory in this pass. The manager does not auto-launch follow-up work.
+- It tracks current phase, manual-testing status, recent important outcomes, saved project guidance, autonomy mode, workflow state, and the latest structured manager response.
+- The manager keeps one compact project memory. Operator prompts, manager replies, job outcomes, operator feedback, and saved guidance all flow into that same memory and older details are summarized automatically.
 - Common recommendation types include `request_manual_test`, `launch_followup_job`, `wait_for_operator`, and `mark_complete`.
 - Manual-testing recommendations are especially likely after browser-facing or UI-heavy changes.
-- Older manager events are compacted into a rolling summary so memory stays bounded instead of growing around raw transcripts.
+- Older manager events, guidance entries, and operator feedback are compacted into rolling summaries so memory stays bounded instead of growing around raw transcripts.
 - The project page is now the main place to review dense manager bullet sections, recent ingested outcomes, and any draft follow-up task.
 - When the manager recommends `launch_followup_job`, the browser can prefill a task draft or launch that draft directly with operator approval.
 - The top of each project page now includes a Project Manager composer so you can type a new direction and get back a fresh structured recommendation without leaving the browser.
 - Composer hints are lightweight and advisory: urgency nudges draft priority, backend preference nudges the recommended backend, and execution mode nudges whether the next draft should stay read-only, make safe changes, or do a full coding pass.
-- `Save as Advisory Context` records the current guidance without launching work.
+- Each saved project also now has an autonomy mode:
+  - `minimal`: asks before every task and never auto-enqueues work
+  - `partial`: runs the current supervised step, reports back, then asks whether it should keep going
+  - `full`: keeps iterating until it hits a stop condition such as manual testing, low confidence, ambiguity, repeated failure, or the task limit
+- The default manager reply now reads like a concise technical lead instead of a raw schema renderer.
+- The primary project-page actions are human-first: `Run it`, `Edit`, `Ask Follow-up`, `Keep Going`, and `Store as Project Guidance`.
+- Raw decision labels, confidence, full draft prompts, and rationale are still available, but they live behind `Show details` instead of dominating the page.
+- `Store as Project Guidance` records the current guidance in compact manager memory without launching work.
 - `Ask Follow-up` keeps the conversation going from the same project page instead of forcing you into a separate job flow.
+- In partial autonomy, the manager can launch the current obvious step, then come back and ask whether it should continue instead of silently looping forever.
+- In full autonomy, the manager can continue iterating, but it still stops for manual testing, low confidence, ambiguity, repeated failure, or session/task-count limits.
 - Recent Project Manager conversation is stored in a bounded durable history so follow-up stays grounded without becoming an unbounded transcript dump.
+- The same project page now includes an Operator Feedback form for manual-test outcomes and browser observations.
+- Use Operator Feedback when you want the next recommendation to react to what a human actually saw, such as layout problems, broken actions, blocked settings, diagnostics issues, or screenshot-backed UI regressions.
+- Feedback fields include outcome, notes, optional severity, optional area, optional screenshot or artifact reference, and a follow-up-required checkbox.
+- Recent operator feedback is rendered back on the project page so you can see what the latest recommendation is reacting to.
 
 ## Browser Task Actions
 
@@ -82,9 +95,29 @@ These actions are intentionally state-aware. Invalid actions should be hidden in
 - `wait_for_operator` means the project should pause for review, clarification, or an environment/config fix.
 - `mark_complete` means recent work looks stable enough that the current project phase may be done.
 - The structured response also includes bullet lists for summary, recent changes, active focus, blockers, manual-test steps, and follow-up questions so the browser can render the manager panel predictably.
-- The recommendation is guidance, not automation. You stay in control of whether a new job is launched.
+- The recommendation is guidance first. You stay in control of whether a new job is launched unless the saved project's autonomy mode explicitly allows the manager to launch the current supervised step.
 - `Edit Draft` opens the existing New Job form prefilled from the latest manager draft.
 - `Launch Task` uses the same saved-project orchestration flow as any other browser-created job; it does not create a hidden autonomous loop.
+- A visible `reacting to operator feedback` badge on the project page means the latest recommendation was driven by recent operator feedback instead of only job outcomes or manager prompts.
+
+## Concise Coding Drafts
+
+- Project Manager drafts are now intentionally short.
+- They use a compact prompt shape with `Goal`, `Scope`, `Do`, `Do not`, and `Output style`.
+- The output-style section asks the coding agent to report only:
+  - `PLAN`
+  - `CHANGED`
+  - `RESULT`
+  - `TESTS`
+  - `BLOCKERS`
+  - `NEXT`
+- This keeps coding work readable in the browser and easier for Project Manager memory to ingest afterward.
+
+## AGENTS.md
+
+- The repository root now includes `AGENTS.md`.
+- It gives Codex a local repo contract for product priorities, architecture boundaries, UI expectations, Project Manager behavior, and concise execution output.
+- That guidance supports both browser-launched drafts and direct coding work in the repo.
 
 ## Diagnostics
 

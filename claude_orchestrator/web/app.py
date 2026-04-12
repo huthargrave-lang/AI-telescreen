@@ -86,6 +86,11 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             return value
         return f"{value[:prefix]}…{value[-suffix:]}"
 
+    def _humanize_label(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return value
+        return str(value).replace("_", " ").strip().title()
+
     def _truncate_text(value: Optional[str], *, limit: int = 88) -> Optional[str]:
         if not value:
             return value
@@ -155,12 +160,25 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "default_provider": project.default_provider,
             "default_base_branch": project.default_base_branch,
             "default_use_git_worktree": project.default_use_git_worktree,
+            "autonomy_mode": project.autonomy_mode,
             "notes": project.notes,
         }
 
     def serialize_project_manager(snapshot) -> dict:
         recommendation = snapshot.state.latest_recommendation
         response = snapshot.state.latest_response
+
+        def _message_status_label(decision: Optional[str]) -> Optional[str]:
+            if not decision:
+                return None
+            return {
+                "launch_followup_job": "draft ready",
+                "request_manual_test": "manual test",
+                "wait_for_operator": "waiting",
+                "mark_complete": "stable",
+                "needs_clarification": "needs scope",
+            }.get(decision, _humanize_label(decision))
+
         return {
             "state": {
                 "current_phase": snapshot.state.current_phase,
@@ -169,6 +187,14 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "needs_manual_testing": snapshot.state.needs_manual_testing,
                 "rolling_summary": snapshot.state.rolling_summary,
                 "stable_project_facts": snapshot.state.stable_project_facts,
+                "workflow_state": snapshot.state.workflow_state,
+                "active_autonomy_session_id": snapshot.state.active_autonomy_session_id,
+                "active_job_id": snapshot.state.active_job_id,
+                "auto_tasks_run_count": snapshot.state.auto_tasks_run_count,
+                "project_guidance": list(snapshot.state.project_guidance),
+                "last_guidance_saved_at": snapshot.state.last_guidance_saved_at.isoformat()
+                if snapshot.state.last_guidance_saved_at
+                else None,
                 "last_job_ingested_at": snapshot.state.last_job_ingested_at.isoformat()
                 if snapshot.state.last_job_ingested_at
                 else None,
@@ -225,6 +251,18 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                         message.metadata.get("decision")
                         or ((message.metadata.get("response") or {}).get("decision") if isinstance(message.metadata.get("response"), dict) else None)
                     ),
+                    "decision_label": _message_status_label(
+                        message.metadata.get("decision")
+                        or ((message.metadata.get("response") or {}).get("decision") if isinstance(message.metadata.get("response"), dict) else None)
+                    ),
+                    "phase": (
+                        message.metadata.get("phase")
+                        or ((message.metadata.get("response") or {}).get("phase") if isinstance(message.metadata.get("response"), dict) else None)
+                    ),
+                    "phase_label": _humanize_label(
+                        message.metadata.get("phase")
+                        or ((message.metadata.get("response") or {}).get("phase") if isinstance(message.metadata.get("response"), dict) else None)
+                    ),
                     "confidence": (
                         (message.metadata.get("response") or {}).get("confidence")
                         if isinstance(message.metadata.get("response"), dict)
@@ -232,6 +270,20 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     ),
                 }
                 for message in snapshot.recent_messages
+            ],
+            "recent_feedback": [
+                {
+                    "id": feedback.id,
+                    "outcome": feedback.outcome,
+                    "notes": feedback.notes,
+                    "notes_preview": _truncate_text(feedback.notes, limit=180) or "",
+                    "severity": feedback.severity,
+                    "area": feedback.area,
+                    "screenshot_reference": feedback.screenshot_reference,
+                    "requires_followup": feedback.requires_followup,
+                    "created_at": feedback.created_at.isoformat() if feedback.created_at else None,
+                }
+                for feedback in snapshot.recent_feedback
             ],
         }
 
@@ -314,6 +366,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "default_provider": "",
             "default_base_branch": "",
             "default_use_git_worktree": False,
+            "autonomy_mode": "minimal",
             "notes": "",
         }
         if form_values:
@@ -342,6 +395,16 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "urgency": "normal",
             "backend_preference": "auto",
             "execution_mode": "",
+        }
+
+    def _default_feedback_form_values() -> dict:
+        return {
+            "outcome": "mixed",
+            "notes": "",
+            "severity": "normal",
+            "area": "",
+            "screenshot_reference": "",
+            "requires_followup": False,
         }
 
     def _project_manager_composer_values(
@@ -482,6 +545,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         manager_form_values: Optional[dict] = None,
         manager_error: Optional[str] = None,
         manager_followup: bool = False,
+        feedback_form_values: Optional[dict] = None,
+        feedback_error: Optional[str] = None,
     ) -> dict:
         project = orchestrator.get_saved_project(project_id)
         jobs = [serialize_job(job) for job in orchestrator.list_project_jobs(project_id, limit=20)]
@@ -501,6 +566,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 form_values=manager_form_values,
             ),
             "manager_error": manager_error,
+            "feedback_form_values": {**_default_feedback_form_values(), **(feedback_form_values or {})},
+            "feedback_error": feedback_error,
             "available_backends": ["auto", *_available_backends()],
         }
 
@@ -889,6 +956,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "default_provider": str(form.get("default_provider") or ""),
             "default_base_branch": str(form.get("default_base_branch") or ""),
             "default_use_git_worktree": _coerce_checkbox(form.get("default_use_git_worktree")),
+            "autonomy_mode": str(form.get("autonomy_mode") or "minimal"),
             "notes": str(form.get("notes") or ""),
         }
         try:
@@ -904,6 +972,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 default_base_branch=form_values["default_base_branch"] or None,
                 default_use_git_worktree=form_values["default_use_git_worktree"],
                 notes=form_values["notes"].strip() or None,
+                autonomy_mode=form_values["autonomy_mode"] or "minimal",
             )
         except Exception as exc:
             return templates.TemplateResponse(
@@ -930,6 +999,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     "default_provider": project.default_provider or "",
                     "default_base_branch": project.default_base_branch or "",
                     "default_use_git_worktree": project.default_use_git_worktree,
+                    "autonomy_mode": project.autonomy_mode,
                     "notes": project.notes or "",
                 },
             ),
@@ -946,6 +1016,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "default_provider": str(form.get("default_provider") or ""),
             "default_base_branch": str(form.get("default_base_branch") or ""),
             "default_use_git_worktree": _coerce_checkbox(form.get("default_use_git_worktree")),
+            "autonomy_mode": str(form.get("autonomy_mode") or "minimal"),
             "notes": str(form.get("notes") or ""),
         }
         try:
@@ -962,6 +1033,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 default_base_branch=form_values["default_base_branch"] or None,
                 default_use_git_worktree=form_values["default_use_git_worktree"],
                 notes=form_values["notes"].strip() or None,
+                autonomy_mode=form_values["autonomy_mode"] or "minimal",
             )
         except Exception as exc:
             return templates.TemplateResponse(
@@ -1014,7 +1086,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "execution_mode": str(form.get("execution_mode") or ""),
         }
         try:
-            orchestrator.submit_project_manager_message(
+            snapshot = orchestrator.submit_project_manager_message(
                 project_id,
                 manager_form_values["message"],
                 urgency=manager_form_values["urgency"],
@@ -1033,10 +1105,54 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 ),
                 status_code=400,
             )
+        notice = "Project Manager updated the project plan and draft recommendation."
+        if snapshot.state.workflow_state == "running_current_task":
+            notice = "The Project Manager launched the current task and will report back after it finishes."
+        elif snapshot.state.workflow_state == "awaiting_continue_decision":
+            notice = "The Project Manager finished the current step and is waiting for your continue decision."
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
-            notice="Project Manager updated the project plan and draft recommendation.",
+            notice=notice,
+        )
+
+    @app.post("/projects/{project_id}/feedback", response_class=HTMLResponse)
+    async def submit_project_feedback(request: Request, project_id: str):
+        form = await _parse_form_values(request)
+        feedback_form_values = {
+            "outcome": str(form.get("outcome") or "mixed"),
+            "notes": str(form.get("notes") or ""),
+            "severity": str(form.get("severity") or "normal"),
+            "area": str(form.get("area") or ""),
+            "screenshot_reference": str(form.get("screenshot_reference") or ""),
+            "requires_followup": _coerce_checkbox(form.get("requires_followup")),
+        }
+        try:
+            orchestrator.submit_project_operator_feedback(
+                project_id,
+                outcome=feedback_form_values["outcome"],
+                notes=feedback_form_values["notes"],
+                severity=feedback_form_values["severity"],
+                area=feedback_form_values["area"] or None,
+                screenshot_reference=feedback_form_values["screenshot_reference"] or None,
+                requires_followup=feedback_form_values["requires_followup"],
+            )
+        except Exception as exc:
+            return templates.TemplateResponse(
+                request=request,
+                name="project_detail.html",
+                context=_project_detail_context(
+                    request,
+                    project_id,
+                    feedback_form_values=feedback_form_values,
+                    feedback_error=str(exc),
+                ),
+                status_code=400,
+            )
+        return _redirect_with_feedback(
+            request,
+            f"/projects/{project_id}",
+            notice="Operator feedback was recorded and the Project Manager refreshed its recommendation.",
         )
 
     @app.post("/projects/{project_id}/manager/save-advisory")
@@ -1048,7 +1164,40 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
-            notice="Saved the latest Project Manager guidance as advisory context.",
+            notice="Stored the latest recommendation as project guidance for future manager decisions.",
+        )
+
+    @app.post("/projects/{project_id}/autonomy")
+    async def update_project_autonomy(request: Request, project_id: str):
+        form = await _parse_form_values(request)
+        try:
+            orchestrator.set_project_autonomy_mode(
+                project_id,
+                str(form.get("autonomy_mode") or "minimal"),
+            )
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/projects/{project_id}", error=str(exc))
+        return _redirect_with_feedback(
+            request,
+            f"/projects/{project_id}",
+            notice="Updated the Project Manager autonomy mode for this project.",
+        )
+
+    @app.post("/projects/{project_id}/manager/continue")
+    async def continue_project_manager(request: Request, project_id: str):
+        try:
+            snapshot = orchestrator.continue_project_manager_autonomy(project_id)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/projects/{project_id}", error=str(exc))
+        notice = (
+            "The Project Manager launched the next supervised task and will report back after it finishes."
+            if snapshot.state.workflow_state == "running_current_task"
+            else "The Project Manager refreshed the next-step recommendation."
+        )
+        return _redirect_with_feedback(
+            request,
+            f"/projects/{project_id}",
+            notice=notice,
         )
 
     @app.post("/projects/{project_id}/manager/launch-draft")

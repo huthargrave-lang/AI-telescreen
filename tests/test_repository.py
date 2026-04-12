@@ -141,6 +141,7 @@ def test_saved_project_round_trip(tmp_path):
         default_provider="anthropic",
         default_base_branch="main",
         default_use_git_worktree=True,
+        autonomy_mode="partial",
         notes="primary repo",
     )
 
@@ -149,6 +150,7 @@ def test_saved_project_round_trip(tmp_path):
 
     assert loaded.name == "AI Telescreen Repo"
     assert loaded.default_use_git_worktree is True
+    assert loaded.autonomy_mode == "partial"
     assert projects[0].id == project.id
 
 
@@ -172,6 +174,7 @@ def test_saved_project_update_round_trip(tmp_path):
         default_provider="anthropic",
         default_base_branch="release",
         default_use_git_worktree=True,
+        autonomy_mode="full",
         notes="after",
     )
 
@@ -180,6 +183,7 @@ def test_saved_project_update_round_trip(tmp_path):
     assert updated.name == "Edited Repo"
     assert loaded.default_base_branch == "release"
     assert loaded.default_use_git_worktree is True
+    assert loaded.autonomy_mode == "full"
     assert loaded.notes == "after"
 
 

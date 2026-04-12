@@ -226,6 +226,19 @@
       .cell-actions form {
         margin: 0;
       }
+      .disclosure {
+        min-width: 0;
+      }
+      .disclosure > summary {
+        list-style: none;
+      }
+      .disclosure > summary::-webkit-details-marker {
+        display: none;
+      }
+      .disclosure-toggle {
+        cursor: pointer;
+        user-select: none;
+      }
       .actions {
         display: flex;
         gap: 10px;

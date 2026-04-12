@@ -192,6 +192,7 @@ class SavedProject:
     notes: Optional[str]
     created_at: datetime
     updated_at: datetime
+    autonomy_mode: str = "minimal"
 
 
 @dataclass
@@ -374,6 +375,19 @@ class ProjectManagerMessage:
 
 
 @dataclass
+class ProjectOperatorFeedback:
+    id: str
+    project_id: str
+    outcome: str
+    notes: str
+    severity: Optional[str] = None
+    area: Optional[str] = None
+    screenshot_reference: Optional[str] = None
+    requires_followup: bool = False
+    created_at: Optional[datetime] = None
+
+
+@dataclass
 class ProjectManagerState:
     project_id: str
     current_phase: str
@@ -388,6 +402,12 @@ class ProjectManagerState:
     latest_recommendation: Optional[ProjectManagerRecommendation] = None
     latest_recommendation_type: Optional[str] = None
     latest_recommendation_reason: Optional[str] = None
+    workflow_state: str = "idle"
+    active_autonomy_session_id: Optional[str] = None
+    active_job_id: Optional[str] = None
+    auto_tasks_run_count: int = 0
+    project_guidance: List[str] = field(default_factory=list)
+    last_guidance_saved_at: Optional[datetime] = None
     last_job_ingested_at: Optional[datetime] = None
     last_compacted_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
@@ -399,3 +419,4 @@ class ProjectManagerSnapshot:
     state: ProjectManagerState
     recent_events: List[ProjectManagerEvent] = field(default_factory=list)
     recent_messages: List[ProjectManagerMessage] = field(default_factory=list)
+    recent_feedback: List[ProjectOperatorFeedback] = field(default_factory=list)

@@ -19,18 +19,73 @@
     <div class="split">
       <div>
         <h2 style="margin-top:0;">Talk to Project Manager</h2>
-        <p class="meta">Tell the project manager what should happen next. It will return a structured recommendation, keep bounded conversation history, and stay advisory unless you choose to launch the draft.</p>
+        <p class="meta">Tell the project manager what should happen next. It keeps one compact project memory, rolls older details into summaries automatically, and stays understandable about when it will ask before continuing.</p>
       </div>
       <div class="pill-row">
-        <span class="pill small">phase {{ project_manager.state.current_phase }}</span>
-        <span class="pill small">{{ project_manager.state.testing_status }}</span>
-        {% if project_manager.response %}
-          <span class="pill small">{{ project_manager.response.decision }}</span>
-          <span class="pill small">{{ project_manager.response.confidence }}</span>
-        {% endif %}
+        <span class="pill small">{{ project_display.autonomy_mode | title }} autonomy</span>
+        <span class="pill small">{{ project_manager.display.workflow_label | replace("_", " ") }}</span>
+        <span class="pill small">{{ project_manager.state.current_phase | replace("_", " ") }}</span>
+        <span class="pill small">{{ project_manager.state.testing_status | replace("_", " ") }}</span>
         {% if project_manager.state.needs_manual_testing %}
           <span class="pill small status-pill status-waiting_retry">manual testing needed</span>
         {% endif %}
+      </div>
+    </div>
+    <div class="summary-grid two" style="margin-top: 14px;">
+      <div>
+        <div class="meta">Autonomy and supervision</div>
+        <div class="value-block">
+          <form method="post" action="/projects/{{ project.id }}/autonomy" class="stack-compact">
+            <label>
+              <span class="meta">Project Manager autonomy</span><br />
+              <select name="autonomy_mode">
+                {% for option in ["minimal", "partial", "full"] %}
+                  <option value="{{ option }}" {% if project_display.autonomy_mode == option %}selected{% endif %}>{{ option | title }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <div class="meta">
+              {% if project_display.autonomy_mode == "minimal" %}
+                Minimal asks before every task and never auto-enqueues work.
+              {% elif project_display.autonomy_mode == "partial" %}
+                Partial runs the current supervised step, reports back, then asks whether it should keep going.
+              {% else %}
+                Full keeps iterating until it hits a stop condition like manual testing, low confidence, repeated failure, or the session limit.
+              {% endif %}
+            </div>
+            <div class="meta">{{ project_manager.display.workflow_helper_text }}</div>
+            {% if project_manager.display.active_job_id %}
+              <div class="meta">
+                Active managed job:
+                <a href="/jobs/{{ project_manager.display.active_job_id }}" title="{{ project_manager.display.active_job_id }}">
+                  <span class="mono-inline">{{ project_manager.display.active_job_id }}</span>
+                </a>
+              </div>
+            {% endif %}
+            <div class="toolbar">
+              <button type="submit" class="secondary">Update autonomy</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <div>
+        <div class="meta">Compact project memory</div>
+        <div class="value-block">
+          <div>{{ project_manager.display.memory_summary }}</div>
+          {% if project_manager.display.project_guidance %}
+            <div style="margin-top: 12px;">
+              <div class="meta">Saved guidance</div>
+              <ul class="list-compact">
+                {% for item in project_manager.display.project_guidance %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          {% endif %}
+          {% if project_manager.display.last_guidance_saved_at %}
+            <div class="meta" style="margin-top: 10px;">Last guidance saved {{ project_manager.display.last_guidance_saved_at }}</div>
+          {% endif %}
+        </div>
       </div>
     </div>
     {% if manager_error %}
@@ -78,15 +133,17 @@
   <section class="panel" style="margin-top: 18px;">
     <div class="split">
       <div>
-        <h2 style="margin-top:0;">Latest Project Manager Response</h2>
-        <p class="meta">The manager response is rendered from the structured schema already stored for this project, so the browser can keep the latest recommendation readable and actionable.</p>
+        <h2 style="margin-top:0;">Latest Project Manager Reply</h2>
+        <p class="meta">The browser keeps the stored structured response under the hood, but the default view stays conversational and action-oriented.</p>
       </div>
       {% if project_manager.response %}
         <div class="pill-row">
-          <span class="pill small">{{ project_manager.response.phase }}</span>
-          <span class="pill small">{{ project_manager.response.ui_layout_hint }}</span>
-          <span class="pill small">{{ project_manager.response.decision }}</span>
-          <span class="pill small">{{ project_manager.response.confidence }}</span>
+          {% for badge in project_manager.display.status_badges %}
+            <span class="pill small">{{ badge }}</span>
+          {% endfor %}
+          {% if project_manager.display.reacting_to_operator_feedback %}
+            <span class="pill small status-pill status-waiting_retry">reacting to operator feedback</span>
+          {% endif %}
         </div>
       {% endif %}
     </div>
@@ -94,31 +151,60 @@
     {% if project_manager.response %}
       <div class="summary-grid two" style="margin-top: 12px;">
         <div>
-          <div class="meta">Recommendation</div>
+          <div class="meta">Project Manager</div>
           <div class="value-block">
-            <strong>{{ project_manager.response.decision }}</strong><br />
-            {{ project_manager.response.reason }}
+            <strong>{{ project_manager.display.reply_lead }}</strong>
+            {% if project_manager.display.reply_why %}
+              <div style="margin-top: 8px;">{{ project_manager.display.reply_why }}</div>
+            {% endif %}
+            {% if project_manager.display.reply_question %}
+              <div class="meta" style="margin-top: 10px;">{{ project_manager.display.reply_question }}</div>
+            {% endif %}
           </div>
         </div>
         <div>
-          <div class="meta">Current summary</div>
-          <div class="value-block">{{ project_manager.display.headline or project_manager.state.summary }}</div>
+          <div class="meta">Recommended next step</div>
+          <div class="value-block">
+            <strong>{{ project_manager.display.recommendation_title }}</strong>
+            {% if project_manager.display.draft_preview %}
+              <div class="pill-row" style="margin-top: 10px;">
+                {% for badge in project_manager.display.draft_preview.badges %}
+                  <span class="pill small">{{ badge }}</span>
+                {% endfor %}
+              </div>
+              <div class="meta truncate-2" style="margin-top: 10px;" title="{{ project_manager.display.draft_preview.prompt_preview }}">
+                {{ project_manager.display.draft_preview.prompt_preview }}
+              </div>
+            {% elif project_manager.response.needs_manual_testing %}
+              <div class="meta" style="margin-top: 10px;">Manual browser verification is the right next move before another coding pass.</div>
+            {% else %}
+              <div class="meta" style="margin-top: 10px;">{{ project_manager.state.summary }}</div>
+            {% endif %}
+          </div>
         </div>
       </div>
 
       <div class="toolbar" style="margin-top: 12px;">
         <form method="post" action="/projects/{{ project.id }}/manager/save-advisory">
-          <button type="submit" class="secondary">Save as Advisory Context</button>
+          <button type="submit" class="secondary">Store as Project Guidance</button>
         </form>
         <a class="pill" href="/projects/{{ project.id }}?manager_followup=1#project-manager-composer">Ask Follow-up</a>
-        {% if project_manager.response.draft_task %}
-          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit Draft</a>
-        {% endif %}
-        {% if project_manager.response.decision == "launch_followup_job" and project_manager.response.draft_task %}
-          <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
-            <button type="submit">Launch Task</button>
+        {% if project_manager.state.workflow_state == "awaiting_continue_decision" and project_manager.response.draft_task %}
+          <form method="post" action="/projects/{{ project.id }}/manager/continue">
+            <button type="submit">Keep Going</button>
           </form>
         {% endif %}
+        {% if project_manager.response.draft_task %}
+          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit</a>
+        {% endif %}
+        {% if project_manager.response.decision == "launch_followup_job" and project_manager.response.draft_task and project_manager.state.workflow_state != "running_current_task" %}
+          <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
+            <button type="submit">Run it</button>
+          </form>
+        {% endif %}
+      </div>
+      <div class="meta" style="margin-top: 8px;">
+        Storing project guidance keeps this recommendation in the manager's compact memory without launching work.
       </div>
 
       <div class="summary-grid two" style="margin-top: 14px;">
@@ -149,14 +235,22 @@
         </div>
       {% endif %}
 
-      {% if project_manager.response.draft_task %}
-        <div style="margin-top: 14px;">
-          <div class="meta">Draft Task</div>
-          <div class="summary-grid two" style="margin-top: 8px;">
-            <div>
-              <div class="meta">Prompt</div>
-              <div class="value-block">{{ project_manager.response.draft_task.prompt }}</div>
+      <details class="disclosure" style="margin-top: 14px;">
+        <summary class="pill disclosure-toggle" style="display: inline-flex;">Show details</summary>
+        <div class="summary-grid two" style="margin-top: 12px;">
+          <div>
+            <div class="meta">Response details</div>
+            <div class="stack-compact">
+              <div class="pill-row">
+                <span class="pill small">{{ project_manager.response.phase }}</span>
+                <span class="pill small">{{ project_manager.response.ui_layout_hint }}</span>
+                <span class="pill small">{{ project_manager.response.decision }}</span>
+                <span class="pill small">{{ project_manager.response.confidence }}</span>
+              </div>
+              <div class="value-block">{{ project_manager.response.reason }}</div>
             </div>
+          </div>
+          {% if project_manager.response.draft_task %}
             <div>
               <div class="meta">Draft settings</div>
               <div class="stack-compact">
@@ -180,6 +274,13 @@
                 <div class="meta">Derived from operator message: {{ project_manager.response.draft_task.derived_from_operator_message or "n/a" }}</div>
               </div>
             </div>
+          {% endif %}
+        </div>
+
+        {% if project_manager.response.draft_task %}
+          <div style="margin-top: 12px;">
+            <div class="meta">Draft prompt</div>
+            <div class="value-block"><code>{{ project_manager.response.draft_task.prompt }}</code></div>
           </div>
           {% if project_manager.response.draft_task.rationale_bullets %}
             <div style="margin-top: 10px;">
@@ -191,10 +292,101 @@
               </ul>
             </div>
           {% endif %}
-        </div>
-      {% endif %}
+        {% endif %}
+      </details>
     {% else %}
-      <p class="meta" style="margin-top: 12px;">No project-manager response is stored yet. Start with a message above or launch the first project-linked job so the manager has concrete outcomes to supervise.</p>
+      <p class="meta" style="margin-top: 12px;">No project-manager reply is stored yet. Start with a message above or launch the first project-linked job so the manager has concrete outcomes to supervise.</p>
+    {% endif %}
+  </section>
+
+  <section class="panel" style="margin-top: 18px;">
+    <div class="split">
+      <div>
+        <h2 style="margin-top:0;">Operator Feedback</h2>
+        <p class="meta">Record manual-test outcomes or screenshot-backed browser feedback here so the Project Manager can react to what was actually observed, not just job output.</p>
+      </div>
+      <div class="pill-row">
+        <span class="pill small">{{ project_manager.recent_feedback | length }} recent feedback entries</span>
+      </div>
+    </div>
+    {% if feedback_error %}
+      <p style="color: var(--danger); margin-top: 12px;">{{ feedback_error }}</p>
+    {% endif %}
+    <form method="post" action="/projects/{{ project.id }}/feedback" class="form-grid" style="margin-top: 12px;">
+      <label>
+        <span class="meta">Outcome</span><br />
+        <select name="outcome">
+          {% for option in ["passed", "failed", "mixed", "blocked"] %}
+            <option value="{{ option }}" {% if feedback_form_values.outcome == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Severity</span><br />
+        <select name="severity">
+          {% for option in ["low", "normal", "high", "critical"] %}
+            <option value="{{ option }}" {% if feedback_form_values.severity == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Area</span><br />
+        <select name="area">
+          <option value="" {% if not feedback_form_values.area %}selected{% endif %}>unspecified</option>
+          {% for option in ["layout", "actions", "settings", "diagnostics", "integrations", "project-manager", "other"] %}
+            <option value="{{ option }}" {% if feedback_form_values.area == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="full">
+        <span class="meta">Notes</span><br />
+        <textarea name="notes" required style="min-height: 120px;">{{ feedback_form_values.notes }}</textarea>
+      </label>
+      <label class="full">
+        <span class="meta">Screenshot or artifact reference</span><br />
+        <input type="text" name="screenshot_reference" value="{{ feedback_form_values.screenshot_reference }}" placeholder="/absolute/path/to/screenshot.png or note about the capture" />
+      </label>
+      <label class="full">
+        <input type="checkbox" name="requires_followup" {% if feedback_form_values.requires_followup %}checked{% endif %} />
+        <span class="meta">Requires follow-up task</span>
+      </label>
+      <div class="full toolbar">
+        <button type="submit">Record Feedback</button>
+      </div>
+    </form>
+
+    {% if project_manager.recent_feedback %}
+      <div class="conversation-list" style="margin-top: 14px;">
+        {% for feedback in project_manager.recent_feedback %}
+          <div class="conversation-item">
+            <div class="conversation-header">
+              <div class="pill-row">
+                <span class="pill small status-pill status-{{ 'completed' if feedback.outcome == 'passed' else ('failed' if feedback.outcome == 'failed' else 'waiting_retry') }}">{{ feedback.outcome }}</span>
+                {% if feedback.severity %}
+                  <span class="pill small">{{ feedback.severity }}</span>
+                {% endif %}
+                {% if feedback.area %}
+                  <span class="pill small">{{ feedback.area }}</span>
+                {% endif %}
+                {% if feedback.requires_followup %}
+                  <span class="pill small status-pill status-waiting_retry">follow-up requested</span>
+                {% endif %}
+              </div>
+              <div class="meta">{{ feedback.created_at or "n/a" }}</div>
+            </div>
+            <div class="stack-compact">
+              <div>{{ feedback.notes_preview }}</div>
+              {% if feedback.screenshot_reference %}
+                <div class="meta truncate-1" title="{{ feedback.screenshot_reference }}">
+                  Screenshot or artifact: {{ feedback.screenshot_reference }}
+                </div>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="meta" style="margin-top: 12px;">No operator feedback has been recorded for this project yet.</p>
     {% endif %}
   </section>
 
@@ -213,8 +405,8 @@
             <div class="conversation-header">
               <div class="pill-row">
                 <span class="pill small">{{ message.role }}</span>
-                {% if message.message_type == "advisory_save" %}
-                  <span class="pill small">advisory saved</span>
+                {% if message.message_type == "guidance_save" %}
+                  <span class="pill small">guidance saved</span>
                 {% elif message.message_type == "ask" %}
                   {% if message.urgency %}
                     <span class="pill small">{{ message.urgency }}</span>
@@ -225,10 +417,10 @@
                   {% if message.execution_mode %}
                     <span class="pill small">{{ message.execution_mode }}</span>
                   {% endif %}
-                {% elif message.decision %}
-                  <span class="pill small">{{ message.decision }}</span>
-                  {% if message.confidence %}
-                    <span class="pill small">{{ message.confidence }}</span>
+                {% elif message.decision_label %}
+                  <span class="pill small">{{ message.decision_label }}</span>
+                  {% if message.phase_label %}
+                    <span class="pill small">{{ message.phase_label }}</span>
                   {% endif %}
                 {% endif %}
               </div>
@@ -278,6 +470,10 @@
         <div>
           <div class="meta">Base branch</div>
           <div>{{ project.default_base_branch or "n/a" }}</div>
+        </div>
+        <div>
+          <div class="meta">Autonomy</div>
+          <div>{{ project.autonomy_mode | title }}</div>
         </div>
         <div>
           <div class="meta">Git worktree</div>

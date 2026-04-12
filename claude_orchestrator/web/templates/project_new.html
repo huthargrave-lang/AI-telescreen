@@ -52,6 +52,17 @@
           </label>
         </div>
       </label>
+      <label>
+        <span class="meta">Project Manager Autonomy</span><br />
+        <select name="autonomy_mode">
+          <option value="minimal" {% if form_values.autonomy_mode == "minimal" %}selected{% endif %}>Minimal</option>
+          <option value="partial" {% if form_values.autonomy_mode == "partial" %}selected{% endif %}>Partial</option>
+          <option value="full" {% if form_values.autonomy_mode == "full" %}selected{% endif %}>Full</option>
+        </select>
+        <div class="meta" style="margin-top: 8px;">
+          Minimal asks before every task. Partial runs one supervised step, then asks whether to continue. Full can keep iterating until it hits a stop condition.
+        </div>
+      </label>
       <label class="full">
         <span class="meta">Notes</span><br />
         <textarea name="notes">{{ form_values.notes }}</textarea>

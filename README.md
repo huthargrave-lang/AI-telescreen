@@ -16,7 +16,7 @@ The codebase is one-language Python and splits responsibilities cleanly:
 - `claude_orchestrator/repository.py`: durable SQLite persistence for jobs, runs, conversation state, artifacts, scheduler events, and message batch metadata.
 - `claude_orchestrator/workspaces.py`: safe per-job workspace preparation, optional git worktree creation, and conservative cleanup helpers.
 - `claude_orchestrator/services/orchestrator.py`: central orchestration logic for enqueue, retry, cancel, crash recovery, batch polling, and state transitions.
-- `claude_orchestrator/services/project_manager.py`: compact per-project memory, outcome ingestion, and advisory next-step recommendations.
+- `claude_orchestrator/services/project_manager.py`: compact per-project memory, bounded autonomy behavior, and advisory next-step recommendations.
 - `claude_orchestrator/services/worker.py`: scheduler/worker loop with concurrency limits and duplicate-claim prevention.
 - `claude_orchestrator/backends/`: pluggable backend adapters.
 - `claude_orchestrator/web/`: FastAPI + Jinja2 + HTMX dashboard.
@@ -168,6 +168,8 @@ For each project, the manager keeps compact durable state such as:
 - a rolling summary of earlier outcomes
 - stable project facts from the saved project defaults
 - manual-testing status
+- autonomy mode and current workflow state
+- saved project guidance
 - the latest structured `ProjectManagerResponse`
 
 The manager ingests completed and failed jobs that were launched from a saved project and records compact structured outcomes instead of raw transcripts. It captures useful fields such as:
@@ -179,7 +181,13 @@ The manager ingests completed and failed jobs that were launched from a saved pr
 - artifact summaries
 - failure summary and retry context
 
-Recommendations are advisory only in this pass. The manager can recommend actions such as:
+Projects now also carry an explicit Project Manager autonomy mode:
+
+- `minimal`: recommend next steps, ask before every task, never auto-enqueue
+- `partial`: launch the current supervised step, report back, then ask whether to continue
+- `full`: keep iterating until a stop condition such as manual testing, low confidence, repeated failure, ambiguity, or the task/session limit
+
+The manager can recommend actions such as:
 
 - `request_manual_test`
 - `launch_followup_job`
@@ -207,16 +215,72 @@ The project page renders those fields as dense cards and bullet sections instead
 
 The project page now includes a real interactive Project Manager composer at the top. Operators can type a new direction such as "Review the codebase and tell me what to do next" or "Focus on the wasted space in this page", optionally hint urgency, backend preference, and execution mode, and receive a fresh structured response rendered as compact browser cards instead of raw JSON.
 
+Partial autonomy is designed to feel like a supervised project lead:
+
+- you prompt the manager
+- it launches the current obvious task
+- the coding backend executes the task in the normal queue/worker system
+- the manager reports back in concise human language
+- it recommends the next likely step
+- it asks whether it should keep going
+
+Full autonomy stays bounded. It will stop for manual testing, low confidence, ambiguity, repeated failure, or the configured auto-task limit instead of looping forever.
+
+The project page also now includes a dedicated operator-feedback panel for manual-test and browser observations. Operators can record:
+
+- `outcome` such as `passed`, `failed`, `mixed`, or `blocked`
+- freeform notes about what they saw
+- optional severity and area tags
+- an optional screenshot or artifact reference
+- whether the observation requires a follow-up task
+
+That feedback is stored durably per project, shown back in compact recent-feedback cards, and fed into the same project-manager memory loop so the next recommendation can react to what the operator actually observed in the browser.
+
 That interactive response stays advisory by default. From the browser, operators can:
 
-- `Save as Advisory Context`
+- `Store as Project Guidance`
 - `Ask Follow-up`
 - `Edit Draft`
 - `Launch Task`
 
-The manager does not auto-enqueue work just because a message was submitted.
+`Store as Project Guidance` means "keep this in the manager's compact project memory without launching work." Operator messages, manager replies, important job outcomes, operator feedback, and saved guidance all feed the same compact project memory instead of separate mysterious context buckets.
 
-To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events and recent operator/manager messages per project, then compacts older outcomes into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log.
+The manager does not auto-enqueue work just because a message or feedback entry was submitted unless the project's autonomy mode allows it.
+
+The default project-page rendering is now human-first:
+
+- the primary panel sounds like a concise technical lead instead of surfacing schema labels
+- the main recommendation is shown as a short natural-language reply plus direct actions such as `Run it`, `Edit`, and `Ask Follow-up`
+- advanced fields such as raw decision labels, confidence, full draft prompt, and rationale stay available behind disclosure instead of dominating the default view
+
+The structured `ProjectManagerResponse` is still preserved internally and durably persisted. AI Telescreen uses that schema for rendering, task drafting, and project-manager memory without forcing operators to read raw implementation fields.
+
+Project Manager and coding execution are also now more clearly separated:
+
+- Project Manager is the planning, memory, and task-drafting surface
+- coding backends such as `codex_cli` remain the execution tools for repo work
+- manager-generated coding drafts are intentionally short and advisory-first
+
+To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events, recent operator/manager messages, recent operator-feedback entries, and recent saved-guidance entries per project, then compacts older information into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log, and it means operators do not have to manually curate large context blobs.
+
+Manager-generated coding drafts now use a compact template:
+
+- `Goal`
+- `Scope`
+- `Do`
+- `Do not`
+- `Output style`
+
+The output-style section explicitly asks coding agents to keep execution summaries terse and structured around:
+
+- `PLAN`
+- `CHANGED`
+- `RESULT`
+- `TESTS`
+- `BLOCKERS`
+- `NEXT`
+
+This keeps coding-job output easier to ingest back into project-manager memory and reduces unnecessary prompt and response bloat.
 
 ## Diagnostics and Doctor
 
@@ -368,6 +432,20 @@ Key settings include:
 - `backends.claude_code_cli.allowed_hook_executables`
 - `backends.codex_cli.args`
 - `backends.codex_cli.use_legacy_command_template`
+
+## AGENTS.md
+
+The repository root now includes [`AGENTS.md`](AGENTS.md).
+
+It gives Codex a concise local instruction set for this repo, including:
+
+- browser-first product priorities
+- architecture-preservation rules
+- human-first UI expectations
+- Project Manager interaction rules
+- concise coding-agent output expectations
+
+That file complements the manager-generated draft prompts and helps keep Codex behavior aligned with AI Telescreen even for direct repo work outside the project-manager launch flow.
 - `backends.codex_cli.timeout_seconds`
 - `backends.codex_cli.smoke_test_timeout_seconds`
 - `backends.codex_cli.auth_mode`
