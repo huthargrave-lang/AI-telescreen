@@ -6,8 +6,10 @@ from urllib.parse import urlparse
 
 import pytest
 
+from claude_orchestrator.backends.messages_api import MessagesApiBackend
 from claude_orchestrator.bootstrap import bootstrap
 from claude_orchestrator.diagnostics import BackendSmokeTestResult, DiagnosticCheck, DiagnosticsReport
+from claude_orchestrator.repository import JobRepository
 from claude_orchestrator.models import BackendResult, ConversationState, EnqueueJobRequest, JobStatus, RetryDecision, RetryDisposition
 from claude_orchestrator.services.orchestrator import OrchestratorService
 from claude_orchestrator.timeutils import utcnow
@@ -17,6 +19,20 @@ from tests.helpers import CompletedBackend
 fastapi = pytest.importorskip("fastapi")
 testclient = pytest.importorskip("fastapi.testclient")
 TestClient = testclient.TestClient
+
+
+@pytest.fixture(autouse=True)
+def _stub_messages_api_backend(monkeypatch):
+    backend = CompletedBackend()
+
+    async def fake_submit(self, job, state, context):
+        return await backend.submit(job, state, context)
+
+    async def fake_continue(self, job, state, context):
+        return await backend.continue_job(job, state, context)
+
+    monkeypatch.setattr(MessagesApiBackend, "submit", fake_submit)
+    monkeypatch.setattr(MessagesApiBackend, "continue_job", fake_continue)
 
 
 def _short_id(value: str, *, prefix: int = 8, suffix: int = 4) -> str:
@@ -777,10 +793,13 @@ def test_project_manager_composer_uses_coding_agent_language(tmp_path):
     assert '<option value="" selected>Auto</option>' in detail.text
 
 
-def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_path):
+def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_path, monkeypatch):
     context = bootstrap(tmp_path)
     app = build_app(root=tmp_path)
     client = TestClient(app)
+
+    def never_claim(self, *args, **kwargs):
+        return None
 
     project = client.post(
         "/projects",
@@ -797,6 +816,7 @@ def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_pat
     )
     project_id = Path(urlparse(project.headers["location"]).path).name
 
+    monkeypatch.setattr(JobRepository, "claim_job", never_claim)
     submitted = client.post(
         f"/projects/{project_id}/manager/messages",
         data={
@@ -811,13 +831,13 @@ def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_pat
 
     assert submitted.status_code == 200
     assert "Task queued, waiting for worker" in submitted.text
-    assert "A worker must be active to pick it up." in submitted.text
+    assert "Task was created but could not start immediately because immediate execution is unavailable in this context." in submitted.text
     assert "I handed off the current step." in submitted.text
     assert _short_id(auto_job.id) in submitted.text
     assert f'href="/jobs/{auto_job.id}"' in submitted.text
 
 
-def test_project_manager_session_shows_running_task_state(tmp_path):
+def test_project_manager_starts_full_autonomy_task_immediately(tmp_path):
     context = bootstrap(tmp_path)
     app = build_app(root=tmp_path)
     client = TestClient(app)
@@ -831,12 +851,12 @@ def test_project_manager_session_shows_running_task_state(tmp_path):
             "default_provider": "anthropic",
             "default_base_branch": "main",
             "autonomy_mode": "full",
-            "notes": "running session coverage",
+            "notes": "immediate start coverage",
         },
         follow_redirects=False,
     )
     project_id = Path(urlparse(created_project.headers["location"]).path).name
-    client.post(
+    submitted = client.post(
         f"/projects/{project_id}/manager/messages",
         data={
             "message": "Find something to improve.",
@@ -847,16 +867,13 @@ def test_project_manager_session_shows_running_task_state(tmp_path):
         follow_redirects=True,
     )
     auto_job = context.repository.list_project_jobs(project_id, limit=10)[0]
-    claimed = context.repository.claim_job(auto_job.id, "worker-running", lease_seconds=30)
-    assert claimed is not None
+    events = context.repository.get_scheduler_events(auto_job.id)
 
-    detail = client.get(f"/projects/{project_id}")
-
-    assert detail.status_code == 200
-    assert "Task running" in detail.text
-    assert "actively processing the manager-launched task" in detail.text
-    assert "I handed off the current step and I’m waiting on the result." in detail.text
-    assert _short_id(auto_job.id) in detail.text
+    assert submitted.status_code == 200
+    assert "The Project Manager handed the task to the coding agent and started it immediately." in submitted.text
+    assert auto_job.status == JobStatus.COMPLETED
+    assert any(event.event_type == "job_run_now_requested" for event in events)
+    assert _short_id(auto_job.id) in submitted.text
 
 
 def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
@@ -908,7 +925,7 @@ def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
     assert "compact memory" in advisory.text
 
 
-def test_project_manager_followup_while_waiting_on_worker_explains_why_no_new_task_started(tmp_path):
+def test_project_manager_followup_while_waiting_on_worker_explains_why_no_new_task_started(tmp_path, monkeypatch):
     context = bootstrap(tmp_path)
     app = build_app(root=tmp_path)
     client = TestClient(app)
@@ -927,6 +944,12 @@ def test_project_manager_followup_while_waiting_on_worker_explains_why_no_new_ta
         follow_redirects=False,
     )
     project_id = Path(urlparse(created_project.headers["location"]).path).name
+
+    def never_claim(self, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(JobRepository, "claim_job", never_claim)
+
     client.post(
         f"/projects/{project_id}/manager/messages",
         data={
@@ -950,13 +973,12 @@ def test_project_manager_followup_while_waiting_on_worker_explains_why_no_new_ta
     )
 
     assert followup.status_code == 200
-    assert "Your follow-up was saved. The Project Manager is still waiting for a worker to pick up the active task." in followup.text
+    assert "Task was created but could not start immediately because immediate execution is unavailable in this context." in followup.text
     assert "I handed off the current step." in followup.text
-    assert "A worker must be active to pick it up." in followup.text
     assert len(context.repository.list_project_jobs(project_id, limit=10)) == 1
 
 
-def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp_path):
+def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp_path, monkeypatch):
     context = bootstrap(tmp_path)
     orchestrator = OrchestratorService(
         root=context.root,
@@ -966,6 +988,16 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     )
     app = build_app(root=tmp_path)
     client = TestClient(app)
+    followup_backend = _FollowupManagerBackend()
+
+    async def fake_submit(self, job, state, context):
+        return await followup_backend.submit(job, state, context)
+
+    async def fake_continue(self, job, state, context):
+        return await followup_backend.continue_job(job, state, context)
+
+    monkeypatch.setattr(MessagesApiBackend, "submit", fake_submit)
+    monkeypatch.setattr(MessagesApiBackend, "continue_job", fake_continue)
 
     project = orchestrator.create_saved_project(
         name="Partial Manager Flow",
@@ -990,7 +1022,6 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     )
     launched = client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=True)
     auto_job = context.repository.list_project_jobs(project.id, limit=10)[0]
-    asyncio.run(orchestrator.run_job_now(auto_job.id, worker_id="worker-partial-browser"))
     detail = client.get(f"/projects/{project.id}")
     job_detail = client.get(f"/jobs/{auto_job.id}")
     continued = client.post(f"/projects/{project.id}/manager/continue", follow_redirects=False)
@@ -999,11 +1030,12 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     assert "waiting for your approval before it launches work" in submitted.text
     assert "Run it" in submitted.text
     assert launched.status_code == 200
-    assert "The Project Manager handed the latest task to the coding agent." in launched.text
+    assert "The Project Manager handed the latest task to the coding agent and started it immediately." in launched.text
     assert detail.status_code == 200
     assert "Waiting on your decision" in detail.text
     assert "Keep Going" in detail.text
     assert "Want me to keep going?" in detail.text
+    assert auto_job.status == JobStatus.COMPLETED
     assert job_detail.status_code == 200
     assert "Keep Going" in job_detail.text
     assert f'/projects/{project.id}/manager/continue' in job_detail.text
@@ -1044,7 +1076,6 @@ def test_project_manager_session_shows_manual_test_pause(tmp_path):
     )
     client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=True)
     auto_job = context.repository.list_project_jobs(project.id, limit=10)[0]
-    asyncio.run(orchestrator.run_job_now(auto_job.id, worker_id="worker-manual-session"))
     orchestrator.project_manager.update_workflow_state(
         project.id,
         workflow_state="blocked_on_manual_test",

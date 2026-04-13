@@ -441,8 +441,9 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         if focus_job:
             status = focus_job.get("status")
             if status == JobStatus.QUEUED.value:
+                queue_reason = str((focus_job.get("metadata") or {}).get("project_manager_queue_reason") or "").strip()
                 agent_headline = "Task queued"
-                agent_detail = "Waiting for a worker to pick it up."
+                agent_detail = queue_reason or "Waiting for a worker to pick it up."
             elif status == JobStatus.RUNNING.value:
                 agent_headline = "Task running"
                 agent_detail = focus_job.get("latest_progress_preview") or "The coding agent is actively working."
@@ -544,6 +545,31 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             },
             "timeline": timeline[:4],
         }
+
+    def _manager_run_now_worker_id(project_id: str, job_id: str) -> str:
+        return f"web-manager-{project_id[:8]}-{job_id[:8]}"
+
+    def _maybe_start_manager_job_now(
+        project_id: str,
+        *,
+        background_tasks: BackgroundTasks,
+    ) -> tuple[Optional[dict], Optional[str]]:
+        session = orchestrator.describe_project_manager_session(project_id)
+        if session.workflow_state != "running_current_task" or not session.active_managed_job_id:
+            return None, None
+        start_result = orchestrator.try_start_manager_job_now(
+            session.active_managed_job_id,
+            worker_id=_manager_run_now_worker_id(project_id, session.active_managed_job_id),
+            launch_context="browser_project_page",
+        )
+        if start_result.claimed_job is not None:
+            background_tasks.add_task(
+                orchestrator.process_claimed_job,
+                start_result.claimed_job,
+                _manager_run_now_worker_id(project_id, session.active_managed_job_id),
+            )
+        refreshed = serialize_project_manager_session(orchestrator.describe_project_manager_session(project_id))
+        return refreshed, start_result.reason
 
     def _job_detail_context(request: Request, job_id: str) -> dict:
         details = orchestrator.inspect(job_id)
@@ -1368,7 +1394,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return RedirectResponse(url=f"/jobs/{job.id}", status_code=303)
 
     @app.post("/projects/{project_id}/manager/messages", response_class=HTMLResponse)
-    async def submit_project_manager_message(request: Request, project_id: str):
+    async def submit_project_manager_message(request: Request, project_id: str, background_tasks: BackgroundTasks):
         form = await _parse_form_values(request)
         session_before = orchestrator.describe_project_manager_session(project_id)
         manager_form_values = {
@@ -1397,31 +1423,40 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 ),
                 status_code=400,
             )
-        session_after = orchestrator.describe_project_manager_session(project_id)
+        session_after_obj = orchestrator.describe_project_manager_session(project_id)
+        session_after = serialize_project_manager_session(session_after_obj)
         notice = "Project Manager updated the plan and compact project memory."
         same_active_job = (
             session_before.active_managed_job_id
-            and session_before.active_managed_job_id == session_after.active_managed_job_id
+            and session_before.active_managed_job_id == session_after_obj.active_managed_job_id
         )
-        if session_after.workflow_state == "running_current_task":
+        if session_after["workflow_state"] == "running_current_task":
+            refreshed_session, queue_reason = _maybe_start_manager_job_now(
+                project_id,
+                background_tasks=background_tasks,
+            )
+            if refreshed_session is not None:
+                session_after = refreshed_session
             if same_active_job:
-                if session_after.waiting_on_worker:
-                    notice = (
+                if session_after["waiting_on_worker"]:
+                    notice = queue_reason or (
                         "Your follow-up was saved. The Project Manager is still waiting for a worker to pick up the active task."
                     )
                 else:
                     notice = (
                         "Your follow-up was saved. The Project Manager is waiting for the active task result before it launches anything else."
                     )
-            elif session_after.waiting_on_worker:
-                notice = "The Project Manager queued the current task and is waiting for a worker to pick it up."
+            elif session_after["active_job_status"] == JobStatus.RUNNING.value:
+                notice = "The Project Manager handed the task to the coding agent and started it immediately."
+            elif session_after["waiting_on_worker"]:
+                notice = queue_reason or "Task was created but could not start immediately because immediate execution is unavailable in this context."
             else:
                 notice = "The Project Manager launched the current task and will report back after it finishes."
-        elif session_after.workflow_state == "awaiting_continue_decision":
+        elif session_after["workflow_state"] == "awaiting_continue_decision":
             notice = "Your follow-up was saved. The Project Manager is waiting on your decision before it launches another task."
-        elif session_after.workflow_state == "blocked_on_manual_test":
+        elif session_after["workflow_state"] == "blocked_on_manual_test":
             notice = "Your follow-up was saved. The Project Manager is paused until manual testing is complete."
-        elif session_after.workflow_state == "awaiting_confirmation":
+        elif session_after["workflow_state"] == "awaiting_confirmation":
             notice = "The Project Manager drafted the next step and is waiting for your approval before it launches work."
         return _redirect_with_feedback(
             request,
@@ -1497,16 +1532,23 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         )
 
     @app.post("/projects/{project_id}/manager/continue")
-    async def continue_project_manager(request: Request, project_id: str):
+    async def continue_project_manager(request: Request, project_id: str, background_tasks: BackgroundTasks):
         try:
             snapshot = orchestrator.continue_project_manager_autonomy(project_id)
         except Exception as exc:
             return _redirect_with_feedback(request, f"/projects/{project_id}", error=str(exc))
-        notice = (
-            "The Project Manager launched the next supervised task and will report back after it finishes."
-            if snapshot.state.workflow_state == "running_current_task"
-            else "The Project Manager refreshed the next-step recommendation."
-        )
+        notice = "The Project Manager refreshed the next-step recommendation."
+        if snapshot.state.workflow_state == "running_current_task":
+            session_after, queue_reason = _maybe_start_manager_job_now(
+                project_id,
+                background_tasks=background_tasks,
+            )
+            if session_after and session_after["active_job_status"] == JobStatus.RUNNING.value:
+                notice = "The Project Manager handed the next supervised task to the coding agent and started it immediately."
+            elif session_after and session_after["waiting_on_worker"]:
+                notice = queue_reason or "Task was created but could not start immediately because immediate execution is unavailable in this context."
+            else:
+                notice = "The Project Manager launched the next supervised task and will report back after it finishes."
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
@@ -1514,15 +1556,30 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         )
 
     @app.post("/projects/{project_id}/manager/launch-draft")
-    async def launch_project_manager_draft(request: Request, project_id: str):
+    async def launch_project_manager_draft(request: Request, project_id: str, background_tasks: BackgroundTasks):
         try:
             job = orchestrator.launch_job_from_project_manager_draft(project_id)
         except Exception as exc:
             return _redirect_with_feedback(request, f"/projects/{project_id}", error=str(exc))
+        start_result = orchestrator.try_start_manager_job_now(
+            job.id,
+            worker_id=_manager_run_now_worker_id(project_id, job.id),
+            launch_context="browser_project_page",
+        )
+        if start_result.claimed_job is not None:
+            background_tasks.add_task(
+                orchestrator.process_claimed_job,
+                start_result.claimed_job,
+                _manager_run_now_worker_id(project_id, job.id),
+            )
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
-            notice="The Project Manager handed the latest task to the coding agent.",
+            notice=(
+                "The Project Manager handed the latest task to the coding agent and started it immediately."
+                if start_result.claimed_job is not None or start_result.current_status == JobStatus.RUNNING.value
+                else start_result.reason or "The Project Manager handed the latest task to the coding agent."
+            ),
         )
 
     @app.post("/worker/run-once")

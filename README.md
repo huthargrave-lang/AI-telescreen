@@ -234,6 +234,8 @@ The top of the project page now uses a live two-column workspace instead of trea
 - the task is queued, running, completed, failed, or waiting to retry
 - manager reviewed the result and decided what happens next
 
+When the Project Manager launches a task from the browser project page, AI Telescreen now tries to start it immediately by reusing the same run-now claim/process flow as the existing browser job controls. In the common browser path, manager-launched work should feel like an active handoff instead of a passive queue drop.
+
 The project page now also exposes live manager-session state so operators can tell, at a glance:
 
 - whether the manager is idle, running, waiting on a worker, waiting on the operator, or paused for manual testing
@@ -242,7 +244,7 @@ The project page now also exposes live manager-session state so operators can te
 - how many auto-launched tasks happened in the current autonomy session
 - when the manager last had meaningful activity
 
-Manager-launched tasks still use the normal queue and worker model. When the session card says `Task queued, waiting for worker`, it means the manager already launched the task but a worker has not picked it up yet.
+Manager-launched tasks still use the normal queue and worker model. The browser now tries to start those tasks immediately when possible. When the session card still says `Task queued, waiting for worker`, it means immediate start was unavailable in that context and AI Telescreen recorded that reason directly on the project page instead of leaving the task in a generic queued state.
 
 The project page also now includes a dedicated operator-feedback panel for manual-test and browser observations. Operators can record:
 

@@ -68,7 +68,8 @@
   - `full`: keeps iterating until it hits a stop condition such as manual testing, low confidence, ambiguity, repeated failure, or the task limit
 - The top of the project page now uses a live Project Manager → Coding Agent workspace instead of a stale latest-reply card.
 - The left side shows what the Project Manager is doing as planner or reviewer. The right side shows the current Coding Agent handoff, including queued, running, completed, failed, or waiting-to-retry task state.
-- Manager-launched tasks still use the same queue and worker model as every other job. `Waiting on worker` means the manager already queued the task, but no worker has picked it up yet.
+- Manager-launched tasks still use the same queue and worker model as every other job, but browser project-page launches now try to start immediately by using the same run-now claim/process path as the normal browser job controls.
+- `Waiting on worker` now means immediate start was unavailable in that context, so the task stayed queued and AI Telescreen shows that reason directly instead of leaving the queue state unexplained.
 - `Waiting on operator` means the manager finished the current supervised step or needs approval before it continues.
 - In partial autonomy, the normal rhythm is: recommend one task, wait for approval, report back after it runs, then show `Keep Going` while waiting on the operator.
 - The default manager reply now reads like a concise technical lead instead of a raw schema renderer.

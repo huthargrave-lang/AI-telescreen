@@ -83,6 +83,14 @@ class JobLifecycleSummary:
     helper_text: str
 
 
+@dataclass
+class ManagerImmediateStartResult:
+    started: bool
+    current_status: str
+    reason: Optional[str] = None
+    claimed_job: Optional[Job] = None
+
+
 class LeaseHeartbeat:
     """Background lease renewer for long-running jobs."""
 
@@ -611,6 +619,70 @@ class OrchestratorService:
         retried = self.retry_job(job_id)
         return self.claim_job_for_run_now(retried.id, worker_id=worker_id)
 
+    def _manager_queue_reason_for_job(self, job: Job) -> str:
+        if job.status == JobStatus.RUNNING:
+            return "Task is already running."
+        if job.status == JobStatus.COMPLETED:
+            return "Task already completed before AI Telescreen could start it again."
+        if job.status == JobStatus.FAILED:
+            return "Task reached a failed state before AI Telescreen could start it immediately."
+        if job.status == JobStatus.CANCELLED:
+            return "Task was cancelled before AI Telescreen could start it immediately."
+        if job.status == JobStatus.WAITING_RETRY:
+            return "Task is waiting for a retry window, so AI Telescreen could not start it immediately."
+        return "Task was created but could not start immediately because immediate execution is unavailable in this context."
+
+    def try_start_manager_job_now(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        launch_context: str,
+    ) -> ManagerImmediateStartResult:
+        job = self.repository.get_job(job_id)
+        if job.status == JobStatus.RUNNING:
+            return ManagerImmediateStartResult(started=False, current_status=job.status.value)
+        if job.status != JobStatus.QUEUED:
+            return ManagerImmediateStartResult(
+                started=False,
+                current_status=job.status.value,
+                reason=self._manager_queue_reason_for_job(job),
+            )
+        try:
+            claimed = self.claim_job_for_run_now(job_id, worker_id=worker_id)
+        except Exception:
+            current = self.repository.get_job(job_id)
+            reason = self._manager_queue_reason_for_job(current)
+            if current.status == JobStatus.QUEUED:
+                self.repository.update_job_status(
+                    job_id,
+                    target_status=JobStatus.QUEUED,
+                    current_status=JobStatus.QUEUED,
+                    clear_lease=False,
+                    event_type="project_manager.immediate_start_unavailable",
+                    event_detail={"reason": reason, "launch_context": launch_context},
+                    metadata_updates={"project_manager_queue_reason": reason},
+                )
+            return ManagerImmediateStartResult(
+                started=False,
+                current_status=current.status.value,
+                reason=reason,
+            )
+        self.repository.update_job_status(
+            job_id,
+            target_status=JobStatus.RUNNING,
+            current_status=JobStatus.RUNNING,
+            clear_lease=False,
+            event_type="project_manager.immediate_start_requested",
+            event_detail={"worker_id": worker_id, "launch_context": launch_context},
+            metadata_remove_keys=("project_manager_queue_reason",),
+        )
+        return ManagerImmediateStartResult(
+            started=True,
+            current_status=claimed.status.value,
+            claimed_job=claimed,
+        )
+
     def delete_job(self, job_id: str) -> JobDeletionResult:
         job = self.repository.get_job(job_id)
         if job.status == JobStatus.RUNNING:
@@ -712,8 +784,9 @@ class OrchestratorService:
                 session_headline = "Task launched"
                 session_detail = "The manager started a task and is waiting for the queue state to settle."
             elif displayed_job.status == JobStatus.QUEUED:
+                queued_reason = str(displayed_job.metadata.get("project_manager_queue_reason") or "").strip()
                 session_headline = "Task queued, waiting for worker"
-                session_detail = (
+                session_detail = queued_reason or (
                     "The manager already launched a task, but it is still queued. "
                     "A worker must be active to pick it up."
                 )
@@ -1502,7 +1575,9 @@ class OrchestratorService:
                     }
                 },
             )
-            return self.repository.get_job(job.id)
+            persisted_job = self.repository.get_job(job.id)
+            await self._continue_manager_autonomy_now(persisted_job, worker_id)
+            return persisted_job
         except asyncio.CancelledError:
             await heartbeat.stop()
             self._persist_interrupted(job, reason="worker_shutdown_interrupted")
@@ -1552,9 +1627,42 @@ class OrchestratorService:
                     },
                     exit_reason=decision.reason,
                 )
-            return self.repository.get_job(job.id)
+            persisted_job = self.repository.get_job(job.id)
+            await self._continue_manager_autonomy_now(persisted_job, worker_id)
+            return persisted_job
         finally:
             await heartbeat.stop()
+
+    async def _continue_manager_autonomy_now(self, job: Job, worker_id: str) -> None:
+        if not bool(job.metadata.get("project_manager_auto_launched")):
+            return
+        project_id = str(job.metadata.get("project_id") or "").strip()
+        if not project_id:
+            return
+        try:
+            project = self.repository.get_saved_project(project_id)
+        except KeyError:
+            return
+        if self.project_manager._normalize_autonomy_mode(project.autonomy_mode) != "full":
+            return
+        session = self.describe_project_manager_session(project_id)
+        next_job_id = session.active_managed_job_id
+        if not next_job_id or next_job_id == job.id:
+            return
+        try:
+            next_job = self.repository.get_job(next_job_id)
+        except KeyError:
+            return
+        if next_job.status != JobStatus.QUEUED:
+            return
+        start_result = self.try_start_manager_job_now(
+            next_job_id,
+            worker_id=worker_id,
+            launch_context="manager_autonomy",
+        )
+        if start_result.claimed_job is None:
+            return
+        await self.process_claimed_job(start_result.claimed_job, worker_id)
 
     async def submit_message_batch(self, jobs: Sequence[Job], worker_id: str) -> List[Job]:
         if not jobs:
