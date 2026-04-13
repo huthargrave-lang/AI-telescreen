@@ -447,6 +447,8 @@ def test_project_manager_save_advisory_records_message(tmp_path):
     assert stored_messages[0].role == "operator"
     assert snapshot.state.project_guidance
     assert snapshot.state.last_guidance_saved_at is not None
+    assert snapshot.state.display_snapshot["project_context"]["operator_guidance"]
+    assert snapshot.state.display_snapshot["session_ledger"]["current_objective"]
 
 
 def test_project_manager_guidance_is_compacted_into_memory(tmp_path):
@@ -476,7 +478,45 @@ def test_project_manager_guidance_is_compacted_into_memory(tmp_path):
     assert loaded is not None
     assert len(loaded.project_guidance) <= 4
     assert int(loaded.rolling_facts.get("saved_guidance_count", 0)) >= 1
-    assert "compact project memory" in snapshot.state.display_snapshot["memory_summary"].lower()
+    assert "project context" in snapshot.state.display_snapshot["memory_summary"].lower()
+
+
+def test_project_manager_session_ledger_tracks_latest_result_and_context(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    project = orchestrator.create_saved_project(
+        name="Ledger Context",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="minimal",
+        notes="Keep the browser-first workflow simple and easy to follow.",
+    )
+
+    orchestrator.submit_project_manager_message(
+        project.id,
+        "Plan the next project-page cleanup pass.",
+        urgency="normal",
+        execution_mode="safe_changes",
+    )
+    orchestrator.save_project_manager_advisory(project.id)
+    job = orchestrator.launch_job_from_project(
+        project.id,
+        prompt="Tighten the project page wording and task-state labels.",
+        task_type="code",
+    )
+    asyncio.run(orchestrator.run_job_now(job.id, worker_id="worker-ledger-context"))
+
+    snapshot = orchestrator.get_project_manager_snapshot(project.id)
+    project_context = snapshot.state.display_snapshot["project_context"]
+    session_ledger = snapshot.state.display_snapshot["session_ledger"]
+
+    assert project_context["purpose"] == "Keep the browser-first workflow simple and easy to follow."
+    assert project_context["operator_guidance"]
+    assert session_ledger["current_objective"]
+    assert session_ledger["latest_result_summary"]
+    assert len(session_ledger["session_change_log"]) <= 3
 
 
 def test_project_manager_feedback_passed_marks_project_complete(tmp_path):

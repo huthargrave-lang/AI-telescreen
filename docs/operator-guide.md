@@ -51,8 +51,8 @@
 
 - Every saved project now has a compact durable project-manager state.
 - The manager ingests completed and failed project-linked jobs and keeps a rolling summary of what has happened.
-- It tracks current phase, manual-testing status, recent important outcomes, saved project guidance, autonomy mode, workflow state, and the latest structured manager response.
-- The manager keeps one compact project memory. Operator prompts, manager replies, job outcomes, operator feedback, and saved guidance all flow into that same memory and older details are summarized automatically.
+- It tracks current phase, manual-testing status, recent important outcomes, manager-owned Project Context, autonomy mode, workflow state, and the latest structured manager response.
+- The manager keeps one compact Project Context. Operator prompts, manager replies, job outcomes, operator feedback, and saved operator guidance all flow into that same memory and older details are summarized automatically.
 - Common recommendation types include `request_manual_test`, `launch_followup_job`, `wait_for_operator`, and `mark_complete`.
 - Manual-testing recommendations are especially likely after browser-facing or UI-heavy changes.
 - Older manager events, guidance entries, and operator feedback are compacted into rolling summaries so memory stays bounded instead of growing around raw transcripts.
@@ -60,6 +60,7 @@
 - When the manager recommends `launch_followup_job`, the browser can prefill a task draft or launch that draft directly with operator approval.
 - The top of each project page now includes a Project Manager composer so you can type a new direction and get back a fresh structured recommendation without leaving the browser.
 - Composer hints are lightweight and advisory: urgency nudges draft priority, Coding Agent chooses which executor should handle launched work, and Execution Mode defaults to `Auto` so the manager can choose read-only review, safe changes, or a fuller coding pass based on the request.
+- Chatting with the Project Manager updates the plan and Project Context first. It does not automatically create a coding job unless you explicitly run it or the current autonomy mode allows it.
 - The Project Manager is the planner and memory layer. The Coding Agent selector does not change the manager's own brain.
 - `Auto` means "use the best available coding agent, preferring Codex when available."
 - Each saved project also now has an autonomy mode:
@@ -68,15 +69,16 @@
   - `full`: keeps iterating until it hits a stop condition such as manual testing, low confidence, ambiguity, repeated failure, or the task limit
 - The top of the project page now uses a live Project Manager → Coding Agent workspace instead of a stale latest-reply card.
 - The left side shows what the Project Manager is doing as planner or reviewer. The right side shows the current Coding Agent handoff, including queued, running, completed, failed, or waiting-to-retry task state.
+- A compact session ledger stays visible in that workspace so you can see the current objective, what changed this session, what those changes were meant to accomplish, the current working hypothesis, the next likely step, and why the manager paused.
 - Manager-launched tasks still use the same queue and worker model as every other job, but browser project-page launches now try to start immediately by using the same run-now claim/process path as the normal browser job controls.
 - `Waiting on worker` now means immediate start was unavailable in that context, so the task stayed queued and AI Telescreen shows that reason directly instead of leaving the queue state unexplained.
 - `Waiting on operator` means the manager finished the current supervised step or needs approval before it continues.
 - In partial autonomy, the normal rhythm is: recommend one task, wait for approval, report back after it runs, then show `Keep Going` while waiting on the operator.
 - The default manager reply now reads like a concise technical lead instead of a raw schema renderer.
-- The primary project-page actions are human-first: `Run it`, `Edit`, `Ask Follow-up`, `Keep Going`, and `Store as Project Guidance`.
+- The primary project-page actions are human-first: `Run it`, `Edit`, `Ask Follow-up`, `Keep Going`, and `Add to Project Context`.
 - Raw decision labels, confidence, full draft prompts, and rationale are still available, but they live behind `Show details` instead of dominating the page.
-- `Store as Project Guidance` records the current guidance in compact manager memory without launching work.
-- Project guidance, operator prompts, manager replies, job outcomes, and operator feedback all feed the same compact project memory. Older details are summarized automatically instead of living in separate context buckets.
+- `Add to Project Context` records the current guidance in compact manager memory without launching work.
+- Project Context, operator prompts, manager replies, job outcomes, and operator feedback all feed the same compact memory. Older details are summarized automatically instead of living in separate context buckets.
 - `Ask Follow-up` keeps the conversation going from the same project page instead of forcing you into a separate job flow.
 - In partial autonomy, the manager recommends the current obvious step, waits for approval to hand it off, then comes back and asks whether it should continue instead of silently looping forever.
 - In full autonomy, the manager can continue iterating, and it now auto-starts obvious low-risk first steps such as read-only reviews instead of asking first. It still stops for manual testing, low confidence, ambiguity, repeated failure, or session/task-count limits.

@@ -138,6 +138,48 @@ class _FollowupManagerBackend:
         return False
 
 
+class _ChangedFilesBackend:
+    name = "messages_api"
+
+    async def submit(self, job, state, context):
+        updated_state = ConversationState(
+            job_id=job.id,
+            system_prompt=state.system_prompt,
+            message_history=state.message_history + [{"role": "assistant", "content": "updated project page layout"}],
+            compact_summary="updated project page layout",
+            tool_context=dict(state.tool_context),
+            last_checkpoint_at=utcnow(),
+        )
+        return BackendResult(
+            status=JobStatus.COMPLETED,
+            output="updated project page layout",
+            updated_state=updated_state,
+            request_payload={"job_id": job.id},
+            response_summary={
+                "summary": "Updated the project page layout and tightened the manager action area.",
+                "changed_files": [
+                    "claude_orchestrator/web/templates/project_detail.html",
+                    "claude_orchestrator/web/app.py",
+                ],
+            },
+            exit_reason="completed",
+        )
+
+    async def continue_job(self, job, state, context):
+        return await self.submit(job, state, context)
+
+    def classify_error(self, error, headers=None):
+        return RetryDecision(
+            disposition=RetryDisposition.FAIL,
+            reason="changed_files_backend_error",
+            error_code="changed_files_backend_error",
+            error_message=str(error),
+        )
+
+    def can_resume(self, job, state):
+        return False
+
+
 def _write_codex_test_config(config_path: Path, sqlite_name: str = "claude-orchestrator.db") -> None:
     config_path.write_text(
         "\n".join(
@@ -751,14 +793,20 @@ def test_project_detail_project_manager_composer_submits_and_renders_history(tmp
     assert "Options" in detail.text
     assert submitted.status_code == 200
     assert "Live workspace" in submitted.text
-    assert "Store as Project Guidance" in submitted.text
+    assert "Add to Project Context" in submitted.text
+    assert "Session ledger" in submitted.text
     assert "History" in submitted.text
     assert "Leave feedback" in submitted.text
-    assert "Run it" in submitted.text
+    assert "Run review" in submitted.text
     assert "Review the codebase and tell me what to do next." in submitted.text
     assert "read-only review" in submitted.text
+    assert "The Project Manager prepared a read-only review." in submitted.text
+    assert "No files were modified yet." in submitted.text
+    assert "Ready to run review" in submitted.text
     assert "Show details" in submitted.text
     assert '<option value="" selected>Auto</option>' in submitted.text
+    assert "waiting for your approval before it starts a coding job" in submitted.text
+    assert context.repository.list_project_jobs(project.id, limit=10) == []
 
 
 def test_project_manager_composer_uses_coding_agent_language(tmp_path):
@@ -790,7 +838,105 @@ def test_project_manager_composer_uses_coding_agent_language(tmp_path):
     assert "Auto (available, prefers Codex)" in detail.text
     assert "Claude (use the best available Claude executor)" in detail.text
     assert "Backend Preference" not in detail.text
+    assert "Chat updates the plan and Project Context" in detail.text
     assert '<option value="" selected>Auto</option>' in detail.text
+
+
+def test_project_manager_live_workspace_shows_read_only_completion_summary(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Read Only Summary",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="partial",
+        notes="read-only summary coverage",
+    )
+    client.post(
+        f"/projects/{project.id}/manager/messages",
+        data={
+            "message": "Review the codebase and tell me what to do next.",
+            "urgency": "normal",
+            "backend_preference": "messages_api",
+            "execution_mode": "read_only",
+        },
+        follow_redirects=True,
+    )
+    submitted = client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=True)
+
+    assert submitted.status_code == 200
+    assert "completed a read-only review" in submitted.text
+    assert "No files were modified." in submitted.text
+    assert "Ready to continue" in submitted.text
+    assert "Completed a read-only review without modifying files." in submitted.text
+
+
+def test_project_manager_live_workspace_shows_code_change_summary_and_changed_files(tmp_path, monkeypatch):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": _ChangedFilesBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+    changed_backend = _ChangedFilesBackend()
+
+    async def fake_submit(self, job, state, context):
+        return await changed_backend.submit(job, state, context)
+
+    async def fake_continue(self, job, state, context):
+        return await changed_backend.continue_job(job, state, context)
+
+    monkeypatch.setattr(MessagesApiBackend, "submit", fake_submit)
+    monkeypatch.setattr(MessagesApiBackend, "continue_job", fake_continue)
+
+    project = orchestrator.create_saved_project(
+        name="Changed Files Summary",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="partial",
+        notes="changed files summary coverage",
+    )
+
+    client.post(
+        f"/projects/{project.id}/manager/messages",
+        data={
+            "message": "Start improving this page.",
+            "urgency": "normal",
+            "backend_preference": "messages_api",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+    submitted = client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=True)
+
+    assert submitted.status_code == 200
+    assert "completed a code change" in submitted.text
+    assert "Updated the project page layout and tightened the manager action area." in submitted.text
+    assert "2 files were changed." in submitted.text
+    assert "project_detail.html" in submitted.text
+    assert "app.py" in submitted.text
+    assert "View changed files" in submitted.text
+    assert "Waiting for manual testing" in submitted.text
+    assert "Record test result" in submitted.text
+    assert "Open the saved project page in the browser." in submitted.text
+    assert "Launch a throwaway job from the project page." in submitted.text
 
 
 def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_path, monkeypatch):
@@ -920,9 +1066,9 @@ def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
     assert followup_job_form.status_code == 200
     assert '<option value="">Auto</option>' in followup_job_form.text
     assert advisory.status_code == 200
-    assert "Stored the latest recommendation as project guidance in the manager" in advisory.text
-    assert "guidance saved" in advisory.text
-    assert "compact memory" in advisory.text
+    assert "Added the latest recommendation to Project Context" in advisory.text
+    assert "added to context" in advisory.text
+    assert "Project Context" in advisory.text
 
 
 def test_project_manager_followup_while_waiting_on_worker_explains_why_no_new_task_started(tmp_path, monkeypatch):
@@ -1027,14 +1173,15 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     continued = client.post(f"/projects/{project.id}/manager/continue", follow_redirects=False)
 
     assert submitted.status_code == 200
-    assert "waiting for your approval before it launches work" in submitted.text
-    assert "Run it" in submitted.text
+    assert "waiting for your approval before it starts a coding job" in submitted.text
+    assert "Start next improvement" in submitted.text
     assert launched.status_code == 200
     assert "The Project Manager handed the latest task to the coding agent and started it immediately." in launched.text
     assert detail.status_code == 200
     assert "Waiting on your decision" in detail.text
-    assert "Keep Going" in detail.text
-    assert "Want me to keep going?" in detail.text
+    assert "Start next improvement" in detail.text
+    assert "Ready to continue" in detail.text
+    assert "No files were modified." in detail.text
     assert auto_job.status == JobStatus.COMPLETED
     assert job_detail.status_code == 200
     assert "Keep Going" in job_detail.text
@@ -1089,6 +1236,7 @@ def test_project_manager_session_shows_manual_test_pause(tmp_path):
     assert detail.status_code == 200
     assert "Waiting for manual testing" in detail.text
     assert "manual test needed" in detail.text
+    assert "Record test result" in detail.text
     assert _short_id(auto_job.id) in detail.text
 
 
@@ -1179,7 +1327,56 @@ def test_project_feedback_submission_renders_recent_feedback_and_updates_recomme
     assert "reacting to operator feedback" in submitted.text
     assert "project-page-gap.png" in submitted.text
     assert "follow-up requested" in submitted.text
-    assert "Run it" in submitted.text
+    assert "What I need next" in submitted.text
+
+
+def test_completed_job_detail_shows_change_summary_and_manual_test_checklist(tmp_path, monkeypatch):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": _ChangedFilesBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+    changed_backend = _ChangedFilesBackend()
+
+    async def fake_submit(self, job, state, context):
+        return await changed_backend.submit(job, state, context)
+
+    async def fake_continue(self, job, state, context):
+        return await changed_backend.continue_job(job, state, context)
+
+    monkeypatch.setattr(MessagesApiBackend, "submit", fake_submit)
+    monkeypatch.setattr(MessagesApiBackend, "continue_job", fake_continue)
+
+    project = orchestrator.create_saved_project(
+        name="Job Detail Change Summary",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="job detail change summary coverage",
+    )
+    job = orchestrator.launch_job_from_project(
+        project.id,
+        prompt="Improve the project page action wording and task-state messaging.",
+        task_type="code",
+    )
+    asyncio.run(orchestrator.run_job_now(job.id, worker_id="worker-change-summary"))
+
+    detail = client.get(f"/jobs/{job.id}")
+
+    assert detail.status_code == 200
+    assert "Change Summary" in detail.text
+    assert "Updated the project page layout and tightened the manager action area." in detail.text
+    assert "2 files changed" in detail.text
+    assert "project_detail.html" in detail.text
+    assert "app.py" in detail.text
+    assert "Open the saved project page in the browser." in detail.text
+    assert "Launch a throwaway job from the project page." in detail.text
 
 
 def test_project_feedback_validation_error_renders_cleanly(tmp_path):

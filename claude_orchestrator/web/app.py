@@ -137,6 +137,86 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             display = f"{display[: limit - 1].rstrip()}…"
         return display
 
+    def _execution_mode_label(value: Optional[str]) -> str:
+        return {
+            "read_only": "read-only review",
+            "safe_changes": "small safe code change",
+            "coding_pass": "coding pass",
+        }.get(str(value or "").strip(), "task")
+
+    def _compact_file_label(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return value
+        return _short_path(value, keep_parts=2, limit=34) or str(value)
+
+    def _collect_changed_files(response_summary, artifacts) -> list[str]:
+        candidates: list[str] = []
+        if isinstance(response_summary, dict):
+            for key in ("changed_files", "files_changed", "files_modified", "modified_files"):
+                raw = response_summary.get(key)
+                if isinstance(raw, list):
+                    candidates.extend(str(item).strip() for item in raw if str(item).strip())
+        for artifact in artifacts or []:
+            metadata = getattr(artifact, "metadata", {}) or {}
+            if not isinstance(metadata, dict):
+                continue
+            for key in ("changed_files", "files_changed", "files_modified", "modified_files"):
+                raw = metadata.get(key)
+                if isinstance(raw, list):
+                    candidates.extend(str(item).strip() for item in raw if str(item).strip())
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in candidates:
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            deduped.append(item)
+        return deduped[:12]
+
+    def _response_summary_preview(response_summary) -> Optional[str]:
+        if not isinstance(response_summary, dict):
+            return None
+        for key in ("summary", "message", "result", "output", "text"):
+            value = response_summary.get(key)
+            if isinstance(value, str) and value.strip():
+                return _truncate_text(value, limit=220)
+        preview_parts: list[str] = []
+        for key in ("changed_files", "files_changed", "notes", "status", "reason"):
+            value = response_summary.get(key)
+            if value in (None, "", [], {}):
+                continue
+            preview_parts.append(f"{key}={value}")
+        return _truncate_text("; ".join(preview_parts), limit=220) if preview_parts else None
+
+    def _default_change_summary(
+        *,
+        execution_mode: Optional[str],
+        changed_files: list[str],
+        response_preview: Optional[str],
+        fallback: Optional[str],
+    ) -> str:
+        normalized_preview = str(response_preview or "").strip()
+        if normalized_preview and normalized_preview.lower() not in {"done", "ok", "completed", "success"}:
+            return response_preview
+        if changed_files:
+            touched = ", ".join(_compact_file_label(path) or path for path in changed_files[:3])
+            return f"Updated {touched}."
+        if execution_mode == "read_only":
+            return "Completed a read-only review without modifying files."
+        return fallback or "Completed the current task without a detailed change summary."
+
+    def _change_file_items(changed_files: list[str], *, href: Optional[str] = None) -> list[dict[str, str]]:
+        items = []
+        for path in changed_files[:4]:
+            item = {
+                "path": path,
+                "label": _compact_file_label(path) or path,
+            }
+            if href:
+                item["href"] = href
+            items.append(item)
+        return items
+
     def _workspace_summary(job) -> dict:
         workspace_kind = job.metadata.get("workspace_kind") or "directory"
         primary_path = job.workspace_path or job.metadata.get("workspace_path")
@@ -256,6 +336,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     "error_summary": event.summary.get("error_summary"),
                     "error_reason": event.summary.get("error_reason"),
                     "manual_testing_needed": bool(event.summary.get("manual_testing_needed")),
+                    "testing_notes": event.summary.get("testing_notes"),
                     "changed_files": event.summary.get("changed_files") or [],
                     "stream_highlights": event.summary.get("stream_highlights") or [],
                 }
@@ -382,6 +463,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         session = project_manager["session"]
         response = project_manager.get("response") or {}
         display = project_manager.get("display") or {}
+        session_ledger = dict(display.get("session_ledger") or {})
         focus_job = _managed_focus_job(session, jobs)
         latest_operator_message = next(
             (message for message in project_manager.get("recent_messages", []) if message.get("role") == "operator"),
@@ -395,6 +477,71 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         )
         coding_agent_label = _coding_agent_label(selected_backend)
         workflow_state = session.get("workflow_state")
+        draft_task = response.get("draft_task") or {}
+        recent_events = project_manager.get("recent_events", [])
+        latest_event = (
+            next(
+                (event for event in recent_events if focus_job and event.get("source_job_id") == focus_job.get("id")),
+                None,
+            )
+            or (recent_events[0] if recent_events else None)
+        )
+        changed_files = list((latest_event or {}).get("changed_files") or [])
+        execution_mode = (
+            str((focus_job or {}).get("metadata", {}).get("execution_mode") or "").strip()
+            or str(draft_task.get("execution_mode") or "").strip()
+            or str((latest_operator_message or {}).get("execution_mode") or "").strip()
+        )
+        manual_testing_needed = bool(
+            session.get("needs_manual_testing")
+            or response.get("needs_manual_testing")
+            or (latest_event or {}).get("manual_testing_needed")
+        )
+
+        def _draft_launch_label(mode: str, *, continue_step: bool = False) -> str:
+            normalized = str(mode or "").strip()
+            if normalized == "read_only":
+                return "Run follow-up review" if continue_step else "Run review"
+            if normalized == "safe_changes":
+                return "Start next improvement"
+            return "Run follow-up task"
+
+        def _primary_action(mode: str) -> dict:
+            if workflow_state == "blocked_on_manual_test":
+                return {
+                    "kind": "feedback",
+                    "label": "Record test result",
+                    "detail": "Open the feedback form so I can use your manual test result before planning the next step.",
+                }
+            if workflow_state == "awaiting_continue_decision" and draft_task:
+                label = _draft_launch_label(mode, continue_step=True)
+                return {
+                    "kind": "continue",
+                    "label": label,
+                    "detail": f"This will hand the next {_execution_mode_label(mode)} to {coding_agent_label}.",
+                }
+            if workflow_state != "running_current_task" and response.get("decision") == "launch_followup_job" and draft_task:
+                label = _draft_launch_label(mode)
+                return {
+                    "kind": "launch_draft",
+                    "label": label,
+                    "detail": f"This will hand the drafted {_execution_mode_label(mode)} to {coding_agent_label}.",
+                }
+            if focus_job and focus_job.get("status") == JobStatus.WAITING_RETRY.value and focus_job.get("actions", {}).get("retry"):
+                return {
+                    "kind": "retry_job",
+                    "label": "Retry task",
+                    "detail": "This will requeue the current task for another attempt.",
+                }
+            return {
+                "kind": None,
+                "label": None,
+                "detail": (
+                    "No button is needed right now. I’ll update this space when the current workflow changes."
+                    if workflow_state == "running_current_task"
+                    else display.get("reply_question") or "Ask a follow-up when you want to steer the next step."
+                ),
+            }
 
         if workflow_state == "running_current_task":
             if session.get("waiting_on_worker"):
@@ -427,9 +574,9 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         elif workflow_state == "awaiting_confirmation":
             manager_headline = display.get("reply_lead") or "I have the next step ready."
             if session.get("autonomy_mode") == "minimal":
-                manager_detail = "Minimal autonomy asks before every task."
+                manager_detail = "Minimal autonomy keeps chat separate from execution and asks before every task."
             elif session.get("autonomy_mode") == "partial":
-                manager_detail = "Partial autonomy recommends the next step and waits for your go-ahead before it launches work."
+                manager_detail = "Partial autonomy recommends the next step and waits for your go-ahead before it starts that task."
             else:
                 manager_detail = session.get("detail")
             manager_action = display.get("reply_question") or "Run it when you want me to hand it to the coding agent."
@@ -437,6 +584,63 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             manager_headline = display.get("reply_lead") or session.get("headline")
             manager_detail = display.get("reply_why") or session.get("detail")
             manager_action = display.get("reply_question") or "Ask follow-up when you want the next step."
+
+        if workflow_state == "blocked_on_manual_test":
+            next_need_label = "Waiting for manual testing"
+            next_need_detail = "Record what you observed before I launch another task."
+        elif workflow_state == "awaiting_continue_decision":
+            next_need_label = "Ready to continue"
+            next_need_detail = response.get("reason") or "I found the next likely follow-up task and I’m waiting on your decision."
+        elif workflow_state == "awaiting_confirmation":
+            next_need_label = "Ready to run review" if execution_mode == "read_only" else "Ready to run follow-up task"
+            next_need_detail = manager_detail
+        elif workflow_state == "running_current_task" and session.get("waiting_on_worker"):
+            next_need_label = "Waiting for worker pickup"
+            next_need_detail = session.get("detail") or "The task is queued until a worker claims it."
+        elif workflow_state == "running_current_task":
+            next_need_label = "Waiting for task result"
+            next_need_detail = "I’m watching the current task and will decide what happens next when it finishes."
+        elif response.get("decision") == "needs_clarification":
+            next_need_label = "Blocked until operator input"
+            next_need_detail = response.get("reason") or manager_action
+        elif response.get("decision") == "mark_complete":
+            next_need_label = "Ready to wrap up"
+            next_need_detail = response.get("reason") or "The current phase looks stable unless you want one more pass."
+        else:
+            next_need_label = "Ready for the next step"
+            next_need_detail = manager_action
+
+        chat_turn = {
+            "operator": _truncate_text(
+                (latest_operator_message or {}).get("content") or (latest_operator_message or {}).get("content_preview"),
+                limit=180,
+            ),
+            "manager": _truncate_text(display.get("conversation_reply"), limit=220),
+        }
+        ledger = {
+            "objective": session_ledger.get("current_objective"),
+            "objective_reason": session_ledger.get("objective_reason"),
+            "changes_this_session": list(session_ledger.get("session_change_log") or [])[:3],
+            "intended_outcomes": list(session_ledger.get("intended_outcomes") or [])[:3],
+            "latest_result_summary": session_ledger.get("latest_result_summary"),
+            "current_hypothesis": session_ledger.get("current_hypothesis"),
+            "next_step": session_ledger.get("next_intended_step"),
+            "stop_reason": session_ledger.get("stop_reason"),
+        }
+
+        primary_action = _primary_action(execution_mode)
+        change_action_href = f"/jobs/{focus_job['id']}#change-summary-section" if focus_job else None
+        change_summary_text = _default_change_summary(
+            execution_mode=execution_mode or None,
+            changed_files=changed_files,
+            response_preview=(latest_event or {}).get("response_summary_preview"),
+            fallback=(
+                "The drafted task has not started yet."
+                if draft_task and not focus_job
+                else "I’ll summarize the change here when the current task finishes."
+            ),
+        )
+        changed_file_items = _change_file_items(changed_files, href=change_action_href)
 
         if focus_job:
             status = focus_job.get("status")
@@ -468,6 +672,113 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         else:
             agent_headline = "No active task"
             agent_detail = "The coding agent is idle until the manager launches work."
+
+        if focus_job:
+            status = focus_job.get("status")
+            if status == JobStatus.QUEUED.value:
+                if execution_mode == "read_only":
+                    outcome_headline = f"{coding_agent_label} is queued to start a read-only review."
+                else:
+                    outcome_headline = f"{coding_agent_label} is queued to start the current task."
+                outcome_detail = agent_detail
+            elif status == JobStatus.RUNNING.value:
+                if execution_mode == "read_only":
+                    outcome_headline = f"{coding_agent_label} is running a read-only review."
+                elif execution_mode == "safe_changes":
+                    outcome_headline = f"{coding_agent_label} is working on a small safe code change."
+                elif execution_mode == "coding_pass":
+                    outcome_headline = f"{coding_agent_label} is running the current coding pass."
+                else:
+                    outcome_headline = f"{coding_agent_label} is working on the current task."
+                outcome_detail = agent_detail
+            elif status == JobStatus.COMPLETED.value:
+                if changed_files:
+                    outcome_headline = f"{coding_agent_label} completed a code change."
+                elif execution_mode == "read_only":
+                    outcome_headline = f"{coding_agent_label} completed a read-only review."
+                else:
+                    outcome_headline = f"{coding_agent_label} completed the current task."
+                outcome_detail = (
+                    (latest_event or {}).get("response_summary_preview")
+                    or focus_job.get("latest_progress_preview")
+                    or "The current step finished and the Project Manager reviewed the result."
+                )
+            elif status == JobStatus.FAILED.value:
+                outcome_headline = f"{coding_agent_label} failed on the current task."
+                outcome_detail = agent_detail
+            elif status == JobStatus.WAITING_RETRY.value:
+                outcome_headline = f"{coding_agent_label} is waiting to retry the current task."
+                outcome_detail = agent_detail
+            else:
+                outcome_headline = agent_headline
+                outcome_detail = agent_detail
+        elif draft_task:
+            if execution_mode == "read_only":
+                outcome_headline = "The Project Manager prepared a read-only review."
+            elif execution_mode == "safe_changes":
+                outcome_headline = f"The Project Manager prepared a small safe task for {coding_agent_label}."
+            elif execution_mode == "coding_pass":
+                outcome_headline = f"The Project Manager prepared the next coding pass for {coding_agent_label}."
+            else:
+                outcome_headline = f"The Project Manager prepared the next task for {coding_agent_label}."
+            outcome_detail = "Nothing has started yet."
+        elif workflow_state == "blocked_on_manual_test":
+            outcome_headline = "No new task is running."
+            outcome_detail = "The next step is paused until manual testing is complete."
+        else:
+            outcome_headline = "No task is in progress."
+            outcome_detail = "The coding agent will stay idle until the manager launches work."
+
+        if changed_files:
+            change_label = f"{len(changed_files)} file{'s' if len(changed_files) != 1 else ''} were changed."
+            change_detail = ", ".join(item["label"] for item in changed_file_items)
+            change_action_label = "View changed files"
+        elif focus_job and focus_job.get("status") == JobStatus.COMPLETED.value:
+            change_label = "No files were modified."
+            change_detail = (
+                "This finished as a read-only review."
+                if execution_mode == "read_only"
+                else "The task completed without any recorded file changes."
+            )
+            change_action_label = None
+        elif focus_job and focus_job.get("status") == JobStatus.RUNNING.value:
+            change_label = "Changes are still in progress."
+            change_detail = "I’ll summarize touched files here once the task finishes."
+            change_action_label = None
+        elif draft_task:
+            change_label = "No files were modified yet."
+            change_detail = "The drafted task has not started yet."
+            change_action_label = None
+        else:
+            change_label = "No files were modified."
+            change_detail = "There is no active task changing code right now."
+            change_action_label = None
+
+        if manual_testing_needed:
+            manual_test_checklist = list(response.get("manual_test_checklist") or [])
+            if not manual_test_checklist and (latest_event or {}).get("testing_notes"):
+                manual_test_checklist = [str((latest_event or {}).get("testing_notes"))]
+            test_next = {
+                "headline": "Test this next",
+                "detail": (latest_event or {}).get("testing_notes")
+                or "Manual testing is still needed before I launch another coding task.",
+                "checklist_items": manual_test_checklist[:4],
+                "needs_manual_testing": True,
+            }
+        elif focus_job and focus_job.get("status") == JobStatus.COMPLETED.value:
+            test_next = {
+                "headline": "Test this next",
+                "detail": "No manual test is requested right now.",
+                "checklist_items": [],
+                "needs_manual_testing": False,
+            }
+        else:
+            test_next = {
+                "headline": "Test this next",
+                "detail": "I’ll add a concrete checklist here when manual testing becomes relevant.",
+                "checklist_items": [],
+                "needs_manual_testing": False,
+            }
 
         agent_preview = None
         if focus_job:
@@ -504,7 +815,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             timeline.append(
                 {
                     "label": f"{coding_agent_label} waiting for handoff",
-                    "text": "Run it when you want the manager to hand off the drafted task.",
+                    "text": primary_action.get("detail") or "The drafted task is ready whenever you want to start it.",
                 }
             )
         if workflow_state == "awaiting_continue_decision":
@@ -534,6 +845,13 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "headline": manager_headline,
                 "detail": manager_detail,
                 "action": manager_action,
+                "chat_turn": chat_turn,
+                "session_ledger": ledger,
+                "next_need": {
+                    "label": next_need_label,
+                    "detail": next_need_detail,
+                },
+                "primary_action": primary_action,
             },
             "coding_agent": {
                 "label": coding_agent_label,
@@ -542,6 +860,24 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "detail": agent_detail,
                 "preview": agent_preview,
                 "active_job": focus_job,
+                "outcome": {
+                    "headline": outcome_headline,
+                    "detail": outcome_detail,
+                },
+                "change_summary": {
+                    "headline": "What changed",
+                    "detail": change_summary_text,
+                },
+                "changes": {
+                    "label": "Files changed",
+                    "count_label": change_label,
+                    "detail": change_detail,
+                    "files": changed_file_items,
+                    "has_changes": bool(changed_files),
+                    "action_label": change_action_label,
+                    "action_href": change_action_href,
+                },
+                "test_next": test_next,
             },
             "timeline": timeline[:4],
         }
@@ -571,12 +907,65 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         refreshed = serialize_project_manager_session(orchestrator.describe_project_manager_session(project_id))
         return refreshed, start_result.reason
 
+    def _job_change_summary(details, *, project_manager_snapshot=None) -> dict:
+        ordered_runs = sorted(details.runs, key=lambda run: run.started_at, reverse=True)
+        latest_run = ordered_runs[0] if ordered_runs else None
+        response_summary = latest_run.response_summary if latest_run else {}
+        project_event_summary = None
+        if project_manager_snapshot is not None:
+            project_event_summary = next(
+                (
+                    event.summary
+                    for event in project_manager_snapshot.recent_events
+                    if event.source_job_id == details.job.id
+                ),
+                None,
+            )
+        changed_files = (
+            list((project_event_summary or {}).get("changed_files") or [])
+            or _collect_changed_files(response_summary, details.artifacts)
+        )
+        summary_text = _default_change_summary(
+            execution_mode=details.job.metadata.get("execution_mode"),
+            changed_files=changed_files,
+            response_preview=(project_event_summary or {}).get("response_summary_preview")
+            or _response_summary_preview(response_summary),
+            fallback=details.latest_progress_message or details.state.compact_summary or details.job.last_error_message,
+        )
+        manual_testing_needed = bool((project_event_summary or {}).get("manual_testing_needed"))
+        manual_test_checklist: list[str] = []
+        if (
+            manual_testing_needed
+            and project_manager_snapshot is not None
+            and project_manager_snapshot.state.latest_response is not None
+        ):
+            manual_test_checklist = list(project_manager_snapshot.state.latest_response.manual_test_checklist or [])[:4]
+        testing_notes = (
+            (project_event_summary or {}).get("testing_notes")
+            or ("No manual test is requested right now." if details.job.status == JobStatus.COMPLETED else "")
+        )
+        return {
+            "summary": summary_text,
+            "has_changes": bool(changed_files),
+            "files_count": len(changed_files),
+            "files_count_label": (
+                f"{len(changed_files)} file{'s' if len(changed_files) != 1 else ''} changed"
+                if changed_files
+                else "No files were modified."
+            ),
+            "files": _change_file_items(changed_files),
+            "manual_testing_needed": manual_testing_needed,
+            "manual_test_checklist": manual_test_checklist,
+            "testing_notes": testing_notes,
+        }
+
     def _job_detail_context(request: Request, job_id: str) -> dict:
         details = orchestrator.inspect(job_id)
         lifecycle = orchestrator.describe_job_lifecycle(details.job)
         project_link = None
         project_manager_session = None
         project_manager_can_continue = False
+        project_manager_snapshot = None
         project_id = details.job.metadata.get("project_id")
         if project_id:
             try:
@@ -586,6 +975,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     orchestrator.describe_project_manager_session(project_id)
                 )
                 snapshot = orchestrator.get_project_manager_snapshot(project_id)
+                project_manager_snapshot = snapshot
                 related_job_ids = {
                     project_manager_session.get("active_job_id"),
                     project_manager_session.get("last_completed_job_id"),
@@ -616,6 +1006,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "latest_progress_message": details.latest_progress_message,
             "artifacts": details.artifacts,
             "integration": serialize_integration(details.integration_summary, details.job.backend),
+            "job_change_summary": _job_change_summary(details, project_manager_snapshot=project_manager_snapshot),
             "project_link": project_link,
             "project_manager_session": project_manager_session,
             "project_manager_can_continue": project_manager_can_continue,
@@ -1425,7 +1816,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             )
         session_after_obj = orchestrator.describe_project_manager_session(project_id)
         session_after = serialize_project_manager_session(session_after_obj)
-        notice = "Project Manager updated the plan and compact project memory."
+        notice = "Project Manager updated the plan and Project Context."
         same_active_job = (
             session_before.active_managed_job_id
             and session_before.active_managed_job_id == session_after_obj.active_managed_job_id
@@ -1453,11 +1844,13 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             else:
                 notice = "The Project Manager launched the current task and will report back after it finishes."
         elif session_after["workflow_state"] == "awaiting_continue_decision":
-            notice = "Your follow-up was saved. The Project Manager is waiting on your decision before it launches another task."
+            notice = "Your follow-up was saved into Project Context. The Project Manager is waiting on your decision before it launches another task."
         elif session_after["workflow_state"] == "blocked_on_manual_test":
-            notice = "Your follow-up was saved. The Project Manager is paused until manual testing is complete."
+            notice = "Your follow-up was saved into Project Context. The Project Manager is paused until manual testing is complete."
         elif session_after["workflow_state"] == "awaiting_confirmation":
-            notice = "The Project Manager drafted the next step and is waiting for your approval before it launches work."
+            notice = "The Project Manager drafted the next step and is waiting for your approval before it starts a coding job."
+        else:
+            notice = "Project Manager updated the plan and Project Context. No coding job was launched."
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
@@ -1512,7 +1905,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
-            notice="Stored the latest recommendation as project guidance in the manager's compact project memory.",
+            notice="Added the latest recommendation to Project Context. The manager will use it in future decisions without launching work.",
         )
 
     @app.post("/projects/{project_id}/autonomy")

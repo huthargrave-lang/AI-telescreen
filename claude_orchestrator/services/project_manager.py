@@ -189,7 +189,7 @@ class ProjectManagerService:
         self._add_manager_message(
             project_id,
             role="operator",
-            content="Stored the latest Project Manager recommendation as project guidance.",
+            content="Added the latest Project Manager recommendation to Project Context.",
             metadata={
                 "message_type": "guidance_save",
                 "decision": state.latest_response.decision,
@@ -355,6 +355,22 @@ class ProjectManagerService:
             last_guidance_saved_at=(previous.last_guidance_saved_at if previous else None),
             rolling_summary=rolling_summary,
             rolling_facts=rolling_facts,
+        )
+        display_snapshot["project_context"] = self._build_project_context(
+            project,
+            latest_response=latest_response,
+            recent_events=recent_events,
+            recent_feedback=recent_feedback,
+            project_guidance=project_guidance,
+            rolling_summary=rolling_summary,
+        )
+        display_snapshot["session_ledger"] = self._build_session_ledger(
+            project,
+            latest_response=latest_response,
+            recent_events=recent_events,
+            workflow_state=workflow_state,
+            active_job_id=active_job_id,
+            rolling_summary=rolling_summary,
         )
         last_job_ingested_at = recent_events[0].created_at if recent_events else (
             previous.last_job_ingested_at if previous else None
@@ -697,7 +713,7 @@ class ProjectManagerService:
             )
         if rolling_facts.get("saved_guidance_count"):
             parts.append(
-                f"Saved project guidance has been compacted {rolling_facts['saved_guidance_count']} time(s)."
+                f"Older Project Context guidance has been compacted {rolling_facts['saved_guidance_count']} time(s)."
             )
         feedback_areas = rolling_facts.get("feedback_areas") or []
         if feedback_areas:
@@ -1387,7 +1403,7 @@ class ProjectManagerService:
             return []
         latest_guidance = project_guidance[0]
         return self._normalize_bullets(
-            [f"Saved project guidance: {latest_guidance}"],
+            [f"Project Context includes operator guidance: {latest_guidance}"],
             limit=1,
         )
 
@@ -1866,7 +1882,7 @@ class ProjectManagerService:
             parts.append(response.summary_bullets[0])
         if response.active_focus_bullets:
             parts.append(response.active_focus_bullets[0])
-        return self._truncate(" ".join(part for part in parts if part), 220) or response.reason or "Saved project guidance."
+        return self._truncate(" ".join(part for part in parts if part), 220) or response.reason or "Saved Project Context guidance."
 
     def _normalize_autonomy_mode(self, autonomy_mode: Optional[str]) -> str:
         value = str(autonomy_mode or "minimal").strip().lower()
@@ -1920,20 +1936,22 @@ class ProjectManagerService:
                 )
             return "The manager launched the current supervised task and will report back after the coding-agent result is ingested."
         if workflow_state == "awaiting_continue_decision":
-            return "The manager finished the current supervised step and is waiting for you to decide whether it should keep going."
+            return "Partial autonomy finished the current approved step and is waiting to hear whether it should keep going."
         if workflow_state == "blocked_on_manual_test":
             return "The manager is paused until manual testing or operator judgment clears the next step."
         if workflow_state == "awaiting_confirmation":
             if autonomy_mode == "minimal":
-                return "Minimal autonomy keeps the manager advisory-only and asks before every task."
+                return "Minimal autonomy keeps manager chat separate from execution and asks before every task."
             if autonomy_mode == "partial":
-                return "Partial autonomy recommends the next supervised step and waits for your go-ahead before it launches work."
+                return "Partial autonomy recommends the next supervised step and waits for approval before it starts that task."
             return "The manager drafted the next step and is waiting for operator confirmation before it launches more work."
         if autonomy_mode == "full" and auto_tasks_run_count:
-            return "The manager can keep iterating on its own, but it will still stop for manual testing, ambiguity, repeated failure, or the session task limit."
+            return "Full autonomy can keep iterating through related low-risk steps, but it still stops for manual testing, ambiguity, repeated failure, low confidence, or the session task limit."
         if autonomy_mode == "partial":
             return "Partial autonomy runs one supervised step at a time, then comes back to you before it continues."
-        return "The manager keeps a compact project memory and will wait for the next operator instruction."
+        if autonomy_mode == "full":
+            return "Full autonomy can inspect, launch, review, and continue until it hits a real stop condition."
+        return "The manager keeps one compact Project Context and will wait for the next operator instruction."
 
     def _build_memory_summary(
         self,
@@ -1943,10 +1961,10 @@ class ProjectManagerService:
         rolling_facts: Dict[str, Any],
     ) -> str:
         parts = [
-            "The Project Manager keeps one compact project memory. Operator prompts, manager replies, job outcomes, feedback, and saved guidance all feed into it."
+            "The Project Manager keeps one compact, manager-owned Project Context. Operator prompts, manager replies, job outcomes, feedback, and saved operator guidance all feed into it."
         ]
         if project_guidance:
-            parts.append(f"Saved project guidance kept ready: {len(project_guidance)}.")
+            parts.append(f"Saved operator guidance kept ready: {len(project_guidance)}.")
         if rolling_facts.get("compacted_event_count"):
             parts.append(f"Older outcomes summarized: {rolling_facts.get('compacted_event_count', 0)}.")
         if rolling_facts.get("operator_feedback_count"):
@@ -1954,6 +1972,151 @@ class ProjectManagerService:
         if rolling_summary:
             parts.append("Recent highlights are already compressed into the rolling summary.")
         return self._truncate(" ".join(parts), 280) or ""
+
+    def _build_project_context(
+        self,
+        project: SavedProject,
+        *,
+        latest_response: ProjectManagerResponse,
+        recent_events: Sequence[ProjectManagerEvent],
+        recent_feedback: Sequence[ProjectOperatorFeedback],
+        project_guidance: Sequence[str],
+        rolling_summary: Optional[str],
+    ) -> Dict[str, Any]:
+        latest_event = recent_events[0] if recent_events else None
+        latest_summary = latest_event.summary if latest_event else {}
+        latest_feedback = self._latest_operator_feedback(recent_feedback)
+        current_goals = self._normalize_bullets(
+            [
+                *(latest_response.summary_bullets[:1]),
+                *(latest_response.active_focus_bullets[:2]),
+            ],
+            limit=3,
+        )
+        architecture_constraints = self._normalize_bullets(
+            [
+                "Preserve AI Telescreen's current service, repository, worker, and browser-first architecture.",
+                (
+                    f"Use saved defaults for launched work: {project.default_backend or 'app default backend'} / "
+                    f"{project.default_provider or 'auto provider'}, base {project.default_base_branch or 'current branch'}."
+                ),
+                (
+                    "Use git worktrees for launched coding tasks."
+                    if project.default_use_git_worktree
+                    else "Keep the normal workspace flow unless a task explicitly calls for a worktree."
+                ),
+            ],
+            limit=3,
+        )
+        lessons_learned: List[str] = []
+        if latest_event is not None:
+            if latest_event.outcome_status == JobStatus.FAILED.value:
+                lessons_learned.append("Recent failure means the next step should stay tightly scoped and verification-focused.")
+            elif latest_summary.get("changed_files"):
+                lessons_learned.append(
+                    f"Recent work already touched {len(latest_summary.get('changed_files') or [])} file(s), so follow-up work should build on that result."
+                )
+            if latest_summary.get("manual_testing_needed"):
+                lessons_learned.append("Browser-facing work should be manually checked before another coding pass starts.")
+        if latest_feedback is not None:
+            if latest_feedback.outcome in {"failed", "mixed", "blocked"}:
+                lessons_learned.append("Recent operator feedback should drive the next pass until the observed issue is resolved.")
+            elif latest_feedback.outcome == "passed":
+                lessons_learned.append("Recent operator verification passed, so the next pass can assume the current flow is stable.")
+        if rolling_summary:
+            lessons_learned.append(rolling_summary)
+        blockers = self._normalize_bullets(latest_response.risks_or_blockers, limit=3)
+        operator_guidance = self._normalize_bullets(project_guidance, limit=self.recent_guidance_limit)
+        return {
+            "purpose": self._truncate(project.notes, 220)
+            or f"Keep {project.name} moving through small, supervised improvements without losing project continuity.",
+            "current_goals": current_goals,
+            "architecture_constraints": architecture_constraints,
+            "active_focus": self._normalize_bullets(latest_response.active_focus_bullets, limit=3),
+            "lessons_learned": self._normalize_bullets(lessons_learned, limit=3),
+            "active_blockers": blockers,
+            "operator_guidance": operator_guidance,
+        }
+
+    def _build_session_ledger(
+        self,
+        project: SavedProject,
+        *,
+        latest_response: ProjectManagerResponse,
+        recent_events: Sequence[ProjectManagerEvent],
+        workflow_state: str,
+        active_job_id: Optional[str],
+        rolling_summary: Optional[str],
+    ) -> Dict[str, Any]:
+        latest_event = recent_events[0] if recent_events else None
+        latest_summary = latest_event.summary if latest_event else {}
+        current_objective = self._truncate(
+            (
+                latest_response.active_focus_bullets[0]
+                if latest_response.active_focus_bullets
+                else latest_response.summary_bullets[0]
+                if latest_response.summary_bullets
+                else latest_response.reason
+            ),
+            180,
+        ) or "Keep the project moving through the next clear supervised step."
+        change_log = list(latest_response.recent_change_bullets[:2])
+        if latest_summary.get("changed_files"):
+            touched = ", ".join(str(path) for path in (latest_summary.get("changed_files") or [])[:3])
+            change_log = self._normalize_bullets(
+                [*change_log, f"Changed files this session: {touched}."],
+                limit=3,
+            )
+        latest_result_summary = self._truncate(
+            latest_summary.get("response_summary_preview")
+            or latest_summary.get("error_summary")
+            or latest_summary.get("error_reason")
+            or rolling_summary
+            or "No coding-agent result has been recorded for this session yet.",
+            220,
+        ) or "No coding-agent result has been recorded for this session yet."
+        if latest_response.decision == "launch_followup_job" and latest_response.draft_task is not None:
+            next_intended_step = (
+                f"Run the drafted {self._execution_mode_label(latest_response.draft_task.execution_mode)} "
+                f"with {latest_response.draft_task.backend}."
+            )
+        elif latest_response.decision == "request_manual_test":
+            next_intended_step = "Complete the manual test checklist and record what you observed."
+        elif latest_response.decision == "mark_complete":
+            next_intended_step = "Pause here unless you want one more focused pass."
+        elif latest_response.followup_questions:
+            next_intended_step = latest_response.followup_questions[0]
+        else:
+            next_intended_step = latest_response.reason
+        stop_reason: Optional[str] = None
+        if workflow_state == "awaiting_confirmation":
+            stop_reason = "Waiting for approval before starting the proposed task."
+        elif workflow_state == "awaiting_continue_decision":
+            stop_reason = "Waiting for a keep-going decision after the last supervised step."
+        elif workflow_state == "blocked_on_manual_test":
+            stop_reason = "Paused until manual testing or operator judgment clears the next step."
+        elif workflow_state == "running_current_task" and active_job_id is None:
+            stop_reason = "Waiting for the queue state to settle after the latest launch."
+        return {
+            "current_objective": current_objective,
+            "objective_reason": self._truncate(latest_response.reason, 220),
+            "session_change_log": self._normalize_bullets(change_log, limit=3),
+            "intended_outcomes": self._normalize_bullets(latest_response.active_focus_bullets, limit=3),
+            "current_hypothesis": self._truncate(
+                {
+                    "launch_followup_job": "The next focused step should move the project forward without a broad rewrite.",
+                    "request_manual_test": "Manual verification should confirm whether the latest visible change is actually good enough.",
+                    "mark_complete": "The current phase looks stable unless new operator feedback proves otherwise.",
+                    "needs_clarification": "The next task still needs one tighter scope decision before it should run.",
+                }.get(latest_response.decision, latest_response.reason),
+                220,
+            ),
+            "latest_result_summary": latest_result_summary,
+            "next_intended_step": self._truncate(next_intended_step, 220),
+            "stop_reason": stop_reason,
+            "active_job_id": active_job_id,
+            "project_name": project.name,
+        }
 
     def _apply_autonomy_display_snapshot(
         self,
@@ -1981,6 +2144,7 @@ class ProjectManagerService:
         display_snapshot["active_job_id"] = active_job_id
         display_snapshot["auto_tasks_run_count"] = auto_tasks_run_count
         display_snapshot["project_guidance"] = list(project_guidance[: self.recent_guidance_limit])
+        display_snapshot["project_context_guidance"] = list(project_guidance[: self.recent_guidance_limit])
         display_snapshot["last_guidance_saved_at"] = (
             last_guidance_saved_at.isoformat() if last_guidance_saved_at else None
         )
@@ -2293,15 +2457,18 @@ class ProjectManagerService:
         phase: str,
         execution_mode: str,
     ) -> str:
-        mode_text = {
-            "read_only": "read-only review",
-            "safe_changes": "small safe pass",
-            "coding_pass": "coding pass",
-        }.get(execution_mode, "next pass")
+        mode_text = self._execution_mode_label(execution_mode)
         return (
             f"The latest operator request points to a {phase.replace('_', ' ')}-focused {mode_text}: "
             f"{self._truncate(operator_message, 140)}"
         )
+
+    def _execution_mode_label(self, execution_mode: Optional[str]) -> str:
+        return {
+            "read_only": "read-only review",
+            "safe_changes": "small safe pass",
+            "coding_pass": "coding pass",
+        }.get(str(execution_mode or "").strip(), "next pass")
 
     def _request_focus_bullet(self, operator_message: str, *, phase: str) -> str:
         phase_prefix = {
@@ -2368,7 +2535,7 @@ class ProjectManagerService:
         elif response.decision == "mark_complete":
             lead = "This looks stable enough to treat the current phase as done."
             title = "Current phase looks complete"
-            question = "Want to store that as guidance or spin up one more pass?"
+            question = "Want to add that to Project Context or spin up one more pass?"
         elif response.decision == "needs_clarification":
             lead = "Before I launch work, I’d tighten the scope a bit."
             title = "Clarify the next pass"

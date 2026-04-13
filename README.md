@@ -169,7 +169,7 @@ For each project, the manager keeps compact durable state such as:
 - stable project facts from the saved project defaults
 - manual-testing status
 - autonomy mode and current workflow state
-- saved project guidance
+- manager-owned Project Context, including saved operator guidance
 - the latest structured `ProjectManagerResponse`
 
 The manager ingests completed and failed jobs that were launched from a saved project and records compact structured outcomes instead of raw transcripts. It captures useful fields such as:
@@ -211,9 +211,9 @@ The manager now persists a full structured response with fields such as:
 - `ui_layout_hint`
 - `confidence`
 
-The project page renders those fields as dense cards and bullet sections instead of dumping raw JSON. When the manager recommends `launch_followup_job`, AI Telescreen also stores a compact display snapshot plus a structured draft task so the browser can offer operator-controlled `Launch Task`, `Edit Draft`, and `Ask Follow-up` actions without auto-enqueueing work behind the scenes.
+The project page renders those fields as dense cards and bullet sections instead of dumping raw JSON. When the manager recommends `launch_followup_job`, AI Telescreen also stores a compact display snapshot, a live session ledger, and a structured draft task so the browser can offer operator-controlled `Launch Task`, `Edit Draft`, and `Ask Follow-up` actions without auto-enqueueing work behind the scenes.
 
-The project page now includes a real interactive Project Manager composer at the top. Operators can type a new direction such as "Review the codebase and tell me what to do next" or "Focus on the wasted space in this page", optionally hint urgency, coding agent, and execution mode, and receive a fresh structured response rendered as compact browser cards instead of raw JSON. Execution Mode now defaults to `Auto`, which lets the manager choose between read-only review, safe changes, or a fuller coding pass based on the request instead of nudging every fresh conversation toward analysis.
+The project page now includes a real interactive Project Manager composer at the top. Operators can type a new direction such as "Review the codebase and tell me what to do next" or "Focus on the wasted space in this page", optionally hint urgency, coding agent, and execution mode, and receive a fresh structured response rendered as compact browser cards instead of raw JSON. Manager chat updates the manager's plan and Project Context first; it only starts a coding job when the operator explicitly runs something or the current autonomy mode allows it. Execution Mode defaults to `Auto`, which lets the manager choose between read-only review, safe changes, or a fuller coding pass based on the request instead of nudging every fresh conversation toward analysis.
 
 Partial autonomy is designed to feel like a supervised project lead:
 
@@ -227,7 +227,7 @@ Partial autonomy is designed to feel like a supervised project lead:
 
 Full autonomy stays bounded. It will stop for manual testing, low confidence, ambiguity, repeated failure, or the configured auto-task limit instead of looping forever.
 
-The top of the project page now uses a live two-column workspace instead of treating the saved `Latest Reply` as the main status surface. The left side shows the Project Manager as planner and reviewer. The right side shows the Coding Agent as the current executor. That makes the handoff loop easier to read at a glance:
+The top of the project page now uses a live two-column workspace instead of treating the saved `Latest Reply` as the main status surface. The left side shows the Project Manager as planner, reviewer, and chat surface. The right side shows the Coding Agent as the current executor. A compact session ledger keeps the manager's current objective, recent session changes, intended outcome, next likely step, and pause reason visible so autonomous work does not drift in circles. That makes the handoff loop easier to read at a glance:
 
 - manager chose the next step
 - manager handed the task to a coding agent
@@ -258,12 +258,12 @@ That feedback is stored durably per project, shown back in compact recent-feedba
 
 That interactive response stays advisory by default. From the browser, operators can:
 
-- `Store as Project Guidance`
+- `Add to Project Context`
 - `Ask Follow-up`
 - `Edit Draft`
 - `Launch Task`
 
-`Store as Project Guidance` means "keep this in the manager's compact project memory without launching work." Operator messages, manager replies, important job outcomes, operator feedback, and saved guidance all feed the same compact project memory instead of separate mysterious context buckets.
+`Add to Project Context` means "keep this in the manager-owned project context without launching work." Operator messages, manager replies, important job outcomes, operator feedback, and saved operator guidance all feed the same compact memory instead of separate mysterious context buckets.
 
 The manager does not auto-enqueue work just because a message or feedback entry was submitted unless the project's autonomy mode allows it.
 
@@ -287,7 +287,7 @@ In full autonomy, the manager now auto-starts obvious low-risk first steps such 
 
 When a follow-up is saved but no new task launches, the project page explains why directly. For example, it now calls out when the manager is waiting for a worker, waiting on your continue decision, or paused for manual testing, instead of leaving the page feeling idle or ambiguous.
 
-To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events, recent operator/manager messages, recent operator-feedback entries, and recent saved-guidance entries per project, then compacts older information into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log, and it means operators do not have to manually curate large context blobs.
+To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events, recent operator/manager messages, recent operator-feedback entries, and recent saved-context entries per project, then compacts older information into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log, and it means operators do not have to manually curate large context blobs.
 
 Manager-generated coding drafts now use a compact template:
 

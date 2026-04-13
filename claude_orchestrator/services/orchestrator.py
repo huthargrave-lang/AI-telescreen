@@ -817,16 +817,16 @@ class OrchestratorService:
         elif workflow_state == "awaiting_confirmation":
             session_headline = "Waiting on your approval"
             session_detail = (
-                "Minimal autonomy asks before every task."
+                "Minimal autonomy keeps manager chat separate from coding jobs and asks before every task."
                 if autonomy_mode == "minimal"
-                else "The manager drafted the next step and is waiting for approval before it launches more work."
+                else "The manager recommended the next step and is waiting for approval before it starts that task."
             )
         elif relevant_jobs:
             session_headline = "Session idle"
             session_detail = "No manager-launched task is active right now. The last supervised session has paused."
         else:
             session_headline = "No task in progress"
-            session_detail = "The manager is idle. Ask it to plan the next step when you want it to act."
+            session_detail = "The manager is idle. Chat updates the plan and Project Context; coding work starts only when you run it or autonomy allows it."
 
         activity_candidates = [
             candidate
@@ -1982,7 +1982,15 @@ class OrchestratorService:
                 active_autonomy_session_id=None,
                 auto_tasks_run_count=0,
             )
-        if response.confidence == "low" or response.phase == "blocked":
+        if response.phase == "blocked":
+            return self.project_manager.update_workflow_state(
+                project.id,
+                workflow_state="awaiting_confirmation",
+                active_job_id=None,
+                active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+            )
+        if response.confidence == "low" and (autonomy_mode == "full" or trigger == "message"):
             return self.project_manager.update_workflow_state(
                 project.id,
                 workflow_state="awaiting_confirmation",

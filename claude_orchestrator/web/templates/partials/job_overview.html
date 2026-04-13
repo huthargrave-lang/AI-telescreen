@@ -58,3 +58,45 @@
     <div class="meta" style="margin-top: 12px;">This job looks local-only right now.</div>
   {% endif %}
 </section>
+
+<section class="panel" id="change-summary-section">
+  <div class="split">
+    <div>
+      <h2 style="margin-top:0;">Change Summary</h2>
+      <div class="meta">A compact operator-facing summary of what this task changed and what to verify next.</div>
+    </div>
+    {% if job_change_summary.manual_testing_needed %}
+      <span class="pill small status-pill status-waiting_retry">manual testing needed</span>
+    {% endif %}
+  </div>
+
+  <div class="summary-grid two" style="margin-top: 12px;">
+    <div>
+      <div class="meta">What changed</div>
+      <div><strong>{{ job_change_summary.summary }}</strong></div>
+    </div>
+    <div>
+      <div class="meta">Files changed</div>
+      <div><strong>{{ job_change_summary.files_count_label }}</strong></div>
+      {% if job_change_summary.files %}
+        <div class="pill-row" style="margin-top: 8px;">
+          {% for item in job_change_summary.files %}
+            <span class="pill small" title="{{ item.path }}">{{ item.label }}</span>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div style="margin-top: 12px;">
+    <div class="meta">Test this next</div>
+    <div class="meta" style="margin-top: 6px;">{{ job_change_summary.testing_notes }}</div>
+    {% if job_change_summary.manual_test_checklist %}
+      <ul class="list-compact" style="margin-top: 8px;">
+        {% for item in job_change_summary.manual_test_checklist %}
+          <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+</section>
