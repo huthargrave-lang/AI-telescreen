@@ -403,13 +403,14 @@ def test_web_projects_create_launch_and_prefill(tmp_path):
     context = bootstrap(tmp_path)
     app = build_app(root=tmp_path)
     client = TestClient(app)
+    new_project_page = client.get("/projects/new")
 
     created_project = client.post(
         "/projects",
         data={
             "name": "Main Repo",
             "repo_path": str(tmp_path),
-            "default_backend": "messages_api",
+            "default_backend": "claude",
             "default_provider": "anthropic",
             "default_base_branch": "main",
             "notes": "operator default",
@@ -429,6 +430,12 @@ def test_web_projects_create_launch_and_prefill(tmp_path):
     projects_page = client.get("/projects")
     project_detail = client.get(f"/projects/{project_id}")
 
+    assert new_project_page.status_code == 200
+    assert "Default Coding Agent" in new_project_page.text
+    assert "Default Backend" not in new_project_page.text
+    assert "Auto (available, prefers Codex)" in new_project_page.text
+    assert "Codex (use Codex for launched coding tasks)" in new_project_page.text
+    assert "Claude (use the best available Claude executor)" in new_project_page.text
     assert created_project.status_code == 303
     assert 'value="messages_api"' in new_job_page.text
     assert f'value="{tmp_path.resolve()}"' in new_job_page.text
@@ -439,6 +446,8 @@ def test_web_projects_create_launch_and_prefill(tmp_path):
     assert launched_job.metadata.get("use_git_worktree") is not True
     assert projects_page.status_code == 200
     assert "Main Repo" in projects_page.text
+    assert "Claude" in projects_page.text
+    assert "messages_api" not in projects_page.text
     assert project_detail.status_code == 200
     assert "Launch Job" in project_detail.text
 
@@ -523,7 +532,7 @@ def test_web_project_edit_and_recent_launch_history(tmp_path):
         data={
             "name": "Main Repo Edited",
             "repo_path": str(tmp_path),
-            "default_backend": "messages_api",
+            "default_backend": "claude",
             "default_provider": "anthropic",
             "default_base_branch": "release",
             "autonomy_mode": "full",
@@ -551,6 +560,7 @@ def test_web_project_edit_and_recent_launch_history(tmp_path):
     assert f'title="{launched_job_id}"' in detail.text
     assert "Edit Project" in detail.text
     assert "Project Manager autonomy" in detail.text
+    assert "Claude" in detail.text
 
 
 def test_web_tables_render_compact_ids_and_paths(tmp_path):
@@ -600,7 +610,7 @@ def test_web_tables_render_compact_ids_and_paths(tmp_path):
     assert projects_page.status_code == 200
     assert expected_project_path in projects_page.text
     assert f'title="{long_repo_path}"' in projects_page.text
-    assert "messages_api" in projects_page.text
+    assert "Claude" in projects_page.text
     assert "anthropic" in projects_page.text
     assert "base release" in projects_page.text
     assert "worktree" in projects_page.text

@@ -65,6 +65,9 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "claude": "Claude",
         }.get(alias, value)
 
+    def _project_coding_agent_options() -> list[dict[str, str]]:
+        return [dict(option) for option in _coding_agent_options()]
+
     def _available_providers() -> list[str]:
         return sorted(
             {job.provider for job in orchestrator.list_jobs(limit=200)}
@@ -241,7 +244,12 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     def _project_defaults_summary(project) -> dict:
         badges = []
         if project.default_backend:
-            badges.append({"label": project.default_backend, "title": "Default backend"})
+            badges.append(
+                {
+                    "label": _coding_agent_label(project.default_backend) or project.default_backend,
+                    "title": "Default coding agent",
+                }
+            )
         if project.default_provider:
             badges.append({"label": project.default_provider, "title": "Default provider"})
         if project.default_base_branch:
@@ -1116,7 +1124,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         values = {
             "name": "",
             "repo_path": "",
-            "default_backend": orchestrator.config.default_backend,
+            "default_backend": _coding_agent_form_value(orchestrator.config.default_backend),
             "default_provider": "",
             "default_base_branch": "",
             "default_use_git_worktree": False,
@@ -1129,6 +1137,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "request": request,
             "form_values": values,
             "available_backends": _available_backends(),
+            "coding_agent_options": _project_coding_agent_options(),
             "available_providers": _available_providers(),
             "error": error,
             "project": project,
@@ -1702,10 +1711,11 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     @app.post("/projects", response_class=HTMLResponse)
     async def create_project(request: Request):
         form = await _parse_form_values(request)
+        default_backend_input = str(form.get("default_backend") or "auto")
         form_values = {
             "name": str(form.get("name") or ""),
             "repo_path": str(form.get("repo_path") or ""),
-            "default_backend": str(form.get("default_backend") or orchestrator.config.default_backend),
+            "default_backend": default_backend_input,
             "default_provider": str(form.get("default_provider") or ""),
             "default_base_branch": str(form.get("default_base_branch") or ""),
             "default_use_git_worktree": _coerce_checkbox(form.get("default_use_git_worktree")),
@@ -1717,10 +1727,14 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 raise ValueError("Project name is required.")
             if not form_values["repo_path"].strip():
                 raise ValueError("Repository path is required.")
+            resolved_default_backend = orchestrator.resolve_coding_agent_preference(
+                form_values["default_backend"],
+                default_backend=orchestrator.config.default_backend,
+            )
             project = orchestrator.create_saved_project(
                 name=form_values["name"].strip(),
                 repo_path=form_values["repo_path"].strip(),
-                default_backend=form_values["default_backend"] or None,
+                default_backend=resolved_default_backend or None,
                 default_provider=form_values["default_provider"] or None,
                 default_base_branch=form_values["default_base_branch"] or None,
                 default_use_git_worktree=form_values["default_use_git_worktree"],
@@ -1748,7 +1762,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 form_values={
                     "name": project.name,
                     "repo_path": project.repo_path,
-                    "default_backend": project.default_backend or orchestrator.config.default_backend,
+                    "default_backend": _coding_agent_form_value(project.default_backend),
                     "default_provider": project.default_provider or "",
                     "default_base_branch": project.default_base_branch or "",
                     "default_use_git_worktree": project.default_use_git_worktree,
@@ -1762,10 +1776,11 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     async def update_project(request: Request, project_id: str):
         project = orchestrator.get_saved_project(project_id)
         form = await _parse_form_values(request)
+        default_backend_input = str(form.get("default_backend") or "auto")
         form_values = {
             "name": str(form.get("name") or ""),
             "repo_path": str(form.get("repo_path") or ""),
-            "default_backend": str(form.get("default_backend") or orchestrator.config.default_backend),
+            "default_backend": default_backend_input,
             "default_provider": str(form.get("default_provider") or ""),
             "default_base_branch": str(form.get("default_base_branch") or ""),
             "default_use_git_worktree": _coerce_checkbox(form.get("default_use_git_worktree")),
@@ -1777,11 +1792,15 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 raise ValueError("Project name is required.")
             if not form_values["repo_path"].strip():
                 raise ValueError("Repository path is required.")
+            resolved_default_backend = orchestrator.resolve_coding_agent_preference(
+                form_values["default_backend"],
+                default_backend=orchestrator.config.default_backend,
+            )
             orchestrator.update_saved_project(
                 project_id,
                 name=form_values["name"].strip(),
                 repo_path=form_values["repo_path"].strip(),
-                default_backend=form_values["default_backend"] or None,
+                default_backend=resolved_default_backend or None,
                 default_provider=form_values["default_provider"] or None,
                 default_base_branch=form_values["default_base_branch"] or None,
                 default_use_git_worktree=form_values["default_use_git_worktree"],

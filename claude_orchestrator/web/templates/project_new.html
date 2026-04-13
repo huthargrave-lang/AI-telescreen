@@ -23,12 +23,13 @@
         <input type="text" name="repo_path" value="{{ form_values.repo_path }}" required />
       </label>
       <label>
-        <span class="meta">Default Backend</span><br />
+        <span class="meta">Default Coding Agent</span><br />
         <select name="default_backend">
-          {% for backend_name in available_backends %}
-            <option value="{{ backend_name }}" {% if form_values.default_backend == backend_name %}selected{% endif %}>{{ backend_name }}</option>
+          {% for option in coding_agent_options %}
+            <option value="{{ option.value }}" {% if form_values.default_backend == option.value %}selected{% endif %}>{{ option.label }}{% if option.hint %} ({{ option.hint }}){% endif %}</option>
           {% endfor %}
         </select>
+        <div class="meta" style="margin-top: 8px;">This sets the default executor for launched project tasks, not the Project Manager itself.</div>
       </label>
       <label>
         <span class="meta">Default Provider</span><br />
