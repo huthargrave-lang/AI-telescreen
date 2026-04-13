@@ -722,8 +722,6 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         draft_task = response.get("draft_task") or {}
         if draft_task.get("backend"):
             values["coding_agent"] = _coding_agent_form_value(draft_task["backend"])
-        if draft_task.get("execution_mode") and not followup:
-            values["execution_mode"] = draft_task["execution_mode"]
         if form_values:
             values.update(form_values)
         return values

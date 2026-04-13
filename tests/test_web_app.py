@@ -742,6 +742,7 @@ def test_project_detail_project_manager_composer_submits_and_renders_history(tmp
     assert "Review the codebase and tell me what to do next." in submitted.text
     assert "read-only review" in submitted.text
     assert "Show details" in submitted.text
+    assert '<option value="" selected>Auto</option>' in submitted.text
 
 
 def test_project_manager_composer_uses_coding_agent_language(tmp_path):
