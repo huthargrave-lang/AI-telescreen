@@ -213,7 +213,7 @@ The manager now persists a full structured response with fields such as:
 
 The project page renders those fields as dense cards and bullet sections instead of dumping raw JSON. When the manager recommends `launch_followup_job`, AI Telescreen also stores a compact display snapshot plus a structured draft task so the browser can offer operator-controlled `Launch Task`, `Edit Draft`, and `Ask Follow-up` actions without auto-enqueueing work behind the scenes.
 
-The project page now includes a real interactive Project Manager composer at the top. Operators can type a new direction such as "Review the codebase and tell me what to do next" or "Focus on the wasted space in this page", optionally hint urgency, backend preference, and execution mode, and receive a fresh structured response rendered as compact browser cards instead of raw JSON.
+The project page now includes a real interactive Project Manager composer at the top. Operators can type a new direction such as "Review the codebase and tell me what to do next" or "Focus on the wasted space in this page", optionally hint urgency, coding agent, and execution mode, and receive a fresh structured response rendered as compact browser cards instead of raw JSON.
 
 Partial autonomy is designed to feel like a supervised project lead:
 
@@ -268,8 +268,14 @@ The structured `ProjectManagerResponse` is still preserved internally and durabl
 Project Manager and coding execution are also now more clearly separated:
 
 - Project Manager is the planning, memory, and task-drafting surface
-- coding backends such as `codex_cli` remain the execution tools for repo work
+- Coding Agent choices on the project page pick the executor for launched tasks, not the manager's own runtime
+- `Auto` means "use the best available coding agent, preferring Codex when available"
+- coding backends such as `codex_cli`, `messages_api`, and Claude-oriented backends remain the execution tools for repo work
 - manager-generated coding drafts are intentionally short and advisory-first
+
+In full autonomy, the manager now auto-starts obvious low-risk first steps such as a read-only codebase review instead of stopping to ask for permission first. It still stops for manual testing, ambiguity, low confidence, repeated failure, or other explicit safeguards.
+
+When a follow-up is saved but no new task launches, the project page explains why directly. For example, it now calls out when the manager is waiting for a worker, waiting on your continue decision, or paused for manual testing, instead of leaving the page feeling idle or ambiguous.
 
 To keep memory bounded, AI Telescreen retains only a small set of recent detailed manager events, recent operator/manager messages, recent operator-feedback entries, and recent saved-guidance entries per project, then compacts older information into a rolling summary plus aggregate counts. This keeps the manager useful without depending on giant raw transcripts or an unbounded event log, and it means operators do not have to manually curate large context blobs.
 

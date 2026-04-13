@@ -20,6 +20,7 @@ from ..models import (
     ProjectOperatorFeedback,
     SavedProject,
 )
+from ..providers import infer_provider
 from ..repository import JobRepository
 from ..timeutils import utcnow
 from ..workspaces import resolve_job_prompt
@@ -1023,7 +1024,8 @@ class ProjectManagerService:
         backend_preference = self._normalize_backend_preference(operator_request.get("backend_preference"))
         execution_mode_hint = self._normalize_execution_mode_hint(operator_request.get("execution_mode"))
         latest_summary = recent_events[0].summary if recent_events else {}
-        explicit_plan = any(
+        explicit_exploration = self._is_exploration_request(lowered)
+        explicit_plan = explicit_exploration or any(
             token in lowered
             for token in (
                 "what to do next",
@@ -1094,7 +1096,11 @@ class ProjectManagerService:
         if urgency in {"high", "critical"}:
             risks_or_blockers.insert(0, f"The operator marked this request as {urgency}.")
         ui_layout_hint = self._layout_hint_for_phase(phase)
-        confidence = "high" if any((explicit_plan, explicit_debug, explicit_polish, explicit_implementation)) else "medium"
+        confidence = (
+            "high"
+            if any((explicit_exploration, explicit_plan, explicit_debug, explicit_polish, explicit_implementation))
+            else "medium"
+        )
         active_focus_bullets = self._build_active_focus_bullets(
             operator_message=operator_message,
             baseline=baseline,
@@ -1137,7 +1143,12 @@ class ProjectManagerService:
             latest_summary=latest_summary,
             backend_preference=backend_preference,
         )
-        preferred_provider = self._preferred_provider(project, baseline=baseline, latest_summary=latest_summary)
+        preferred_provider = self._preferred_provider(
+            project,
+            baseline=baseline,
+            latest_summary=latest_summary,
+            preferred_backend=preferred_backend,
+        )
         draft_task = self._build_operator_draft_task(
             project,
             baseline=baseline,
@@ -1150,7 +1161,12 @@ class ProjectManagerService:
         )
 
         manual_test_checklist = baseline.manual_test_checklist if baseline.needs_manual_testing else []
-        if explicit_plan and execution_mode == "read_only":
+        if explicit_exploration:
+            reason = (
+                "The operator asked the manager to start with an exploratory low-risk step, "
+                "so the first pass stays read-only."
+            )
+        elif explicit_plan and execution_mode == "read_only":
             reason = "The operator asked for a planning or audit pass, so the manager drafted a read-only next step."
         elif explicit_debug:
             reason = "The operator asked for a debugging-focused pass, so the manager drafted a targeted follow-up task."
@@ -1487,11 +1503,35 @@ class ProjectManagerService:
         *,
         baseline: ProjectManagerResponse,
         latest_summary: Dict[str, Any],
+        preferred_backend: str,
     ) -> Optional[str]:
         if baseline.draft_task and baseline.draft_task.provider:
-            return baseline.draft_task.provider
-        provider = str(latest_summary.get("provider") or project.default_provider or "").strip()
-        return provider or None
+            provider = baseline.draft_task.provider
+        else:
+            provider = str(latest_summary.get("provider") or project.default_provider or "").strip() or None
+        expected_provider = infer_provider(preferred_backend)
+        if provider and provider.strip().lower() == expected_provider:
+            return provider
+        return expected_provider
+
+    def _is_exploration_request(self, lowered_message: str) -> bool:
+        return any(
+            phrase in lowered_message
+            for phrase in (
+                "review the codebase",
+                "read through the codebase",
+                "find something to improve",
+                "look for something to improve",
+                "look for the next best",
+                "next best ux fix",
+                "next best ui fix",
+                "start improving this",
+                "start improving the project",
+                "review this project",
+                "review this repo",
+                "audit this project",
+            )
+        )
 
     def _phase_from_request(
         self,
@@ -1503,6 +1543,8 @@ class ProjectManagerService:
         explicit_polish: bool,
     ) -> str:
         lowered = operator_message.lower()
+        if self._is_exploration_request(lowered):
+            return "planning"
         if explicit_debug:
             return "debugging"
         if explicit_plan and "implement" not in lowered and "fix" not in lowered:
@@ -1525,6 +1567,8 @@ class ProjectManagerService:
         latest_summary: Dict[str, Any],
     ) -> str:
         lowered = operator_message.lower()
+        if self._is_exploration_request(lowered):
+            return "read_only"
         if any(token in lowered for token in ("read-only", "read only", "audit", "review", "what to do next", "plan")):
             return "read_only"
         if any(token in lowered for token in ("polish", "cleanup", "wasted space", "layout", "spacing", "format", "tooltip", "badge")):
@@ -1897,10 +1941,10 @@ class ProjectManagerService:
         rolling_facts: Dict[str, Any],
     ) -> str:
         parts = [
-            "The Project Manager keeps one compact project memory that auto-rolls older details into summaries."
+            "The Project Manager keeps one compact project memory. Operator prompts, manager replies, job outcomes, feedback, and saved guidance all feed into it."
         ]
         if project_guidance:
-            parts.append(f"Saved guidance entries kept ready: {len(project_guidance)}.")
+            parts.append(f"Saved project guidance kept ready: {len(project_guidance)}.")
         if rolling_facts.get("compacted_event_count"):
             parts.append(f"Older outcomes summarized: {rolling_facts.get('compacted_event_count', 0)}.")
         if rolling_facts.get("operator_feedback_count"):
@@ -1944,7 +1988,7 @@ class ProjectManagerService:
             rolling_facts=rolling_facts,
         )
         if workflow_state == "running_current_task":
-            display_snapshot["reply_question"] = "I started the current step and I’ll report back after the result is in."
+            display_snapshot["reply_question"] = "I’m on it now and I’ll report back after the result is in."
             display_snapshot["conversation_reply"] = " ".join(
                 part
                 for part in [
@@ -1956,6 +2000,18 @@ class ProjectManagerService:
             ).strip()
         if workflow_state == "awaiting_continue_decision":
             display_snapshot["reply_question"] = "I finished the current step. Want me to keep going?"
+            display_snapshot["conversation_reply"] = " ".join(
+                part
+                for part in [
+                    display_snapshot.get("reply_lead"),
+                    display_snapshot.get("reply_why"),
+                    display_snapshot.get("reply_question"),
+                ]
+                if part
+            ).strip()
+        if workflow_state == "blocked_on_manual_test":
+            display_snapshot["reply_lead"] = "I’m paused until manual testing is complete."
+            display_snapshot["reply_question"] = "Leave feedback here when the check is done."
             display_snapshot["conversation_reply"] = " ".join(
                 part
                 for part in [
@@ -2291,37 +2347,37 @@ class ProjectManagerService:
         execution_mode = draft_task.execution_mode if draft_task and draft_task.execution_mode else None
         if response.decision == "launch_followup_job":
             if execution_mode == "read_only":
-                lead = "I'd start with a read-only review."
-                title = "Run a read-only review"
+                lead = "Sounds good. I’d start with a read-only review."
+                title = "Read-only review"
             elif response.phase == "debugging":
-                lead = "I'd run a focused debugging pass next."
-                title = "Run a focused debugging pass"
+                lead = "I found a focused debugging step to run next."
+                title = "Focused debugging pass"
             elif execution_mode == "safe_changes":
-                lead = "I'd do a small safe coding pass next."
-                title = "Run a small safe pass"
+                lead = "I found one small safe pass worth running next."
+                title = "Small safe pass"
             else:
-                lead = "I'd launch the next scoped coding pass."
-                title = "Run the next coding pass"
-            question = "Want me to run that?" if draft_task else "Want to refine it first?"
+                lead = "I found the next scoped coding pass."
+                title = "Next coding pass"
+            question = "Want me to run it?" if draft_task else "Want me to refine it first?"
         elif response.decision == "request_manual_test":
-            lead = "I'd pause for a manual browser check before another code pass."
-            title = "Pause for manual verification"
+            lead = "I’m pausing here until manual testing is complete."
+            title = "Manual verification"
             question = "Want the checklist right here?"
         elif response.decision == "mark_complete":
             lead = "This looks stable enough to treat the current phase as done."
-            title = "Treat this phase as complete"
-            question = "Want to keep it as advisory context or spin up one more pass?"
+            title = "Current phase looks complete"
+            question = "Want to store that as guidance or spin up one more pass?"
         elif response.decision == "needs_clarification":
-            lead = "Before I draft work, I'd tighten the scope a bit."
-            title = "Clarify the next scoped pass"
+            lead = "Before I launch work, I’d tighten the scope a bit."
+            title = "Clarify the next pass"
             question = response.followup_questions[0] if response.followup_questions else "What single outcome matters most next?"
         else:
             if response.phase == "blocked":
-                lead = "I'd hold here until the current blocker is cleared."
-                title = "Pause until the blocker is cleared"
+                lead = "I’m holding here until the current blocker is cleared."
+                title = "Blocked for now"
             else:
-                lead = "I'd pause here and review the latest state before launching more work."
-                title = "Hold here for operator review"
+                lead = "I’m holding here until the current workflow is resolved."
+                title = "Waiting on the current workflow"
             question = response.followup_questions[0] if response.followup_questions else ""
         why = response.reason or (response.summary_bullets[0] if response.summary_bullets else "")
         full_text = " ".join(part for part in [lead, why, question] if part).strip()

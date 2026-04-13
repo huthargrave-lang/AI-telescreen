@@ -5,7 +5,7 @@ from pathlib import Path
 
 from claude_orchestrator.models import BackendResult, ConversationState, JobStatus, RetryDecision, RetryDisposition
 from claude_orchestrator.timeutils import utcnow
-from tests.helpers import build_test_orchestrator
+from tests.helpers import CompletedBackend, build_test_orchestrator
 
 
 class FailingBackend:
@@ -218,7 +218,7 @@ def test_project_manager_submit_message_creates_structured_response_and_history(
     assert snapshot.state.latest_response.draft_task is not None
     assert snapshot.state.latest_response.draft_task.execution_mode == "read_only"
     assert snapshot.state.latest_response.draft_task.backend == "messages_api"
-    assert snapshot.state.display_snapshot["reply_lead"] == "I'd start with a read-only review."
+    assert snapshot.state.display_snapshot["reply_lead"] == "Sounds good. I’d start with a read-only review."
     assert "PLAN / CHANGED / RESULT / TESTS / BLOCKERS / NEXT" in snapshot.state.latest_response.draft_task.prompt
     assert "Goal:\n" in snapshot.state.latest_response.draft_task.prompt
     assert [message.role for message in snapshot.recent_messages][-2:] == ["operator", "manager"]
@@ -325,6 +325,71 @@ def test_project_manager_full_autonomy_launches_next_step_until_stop_condition(t
     assert len(project_jobs) >= 2
     assert project_jobs[0].id != first_job.id
     assert project_jobs[0].metadata["project_manager_auto_launched"] is True
+
+
+def test_project_manager_full_autonomy_auto_starts_read_only_exploration_with_auto_agent(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(
+        tmp_path,
+        backends={"codex_cli": CompletedBackend(), "messages_api": CompletedBackend()},
+    )
+    project = orchestrator.create_saved_project(
+        name="Exploration Autonomy",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="full",
+        notes=None,
+    )
+
+    snapshot = orchestrator.submit_project_manager_message(
+        project.id,
+        "Review the codebase and tell me what to do next.",
+        urgency="normal",
+        backend_preference="auto",
+    )
+    project_jobs = repository.list_project_jobs(project.id, limit=10)
+
+    assert snapshot.state.workflow_state == "running_current_task"
+    assert snapshot.state.latest_response is not None
+    assert snapshot.state.latest_response.draft_task is not None
+    assert snapshot.state.latest_response.draft_task.execution_mode == "read_only"
+    assert snapshot.state.latest_response.draft_task.backend == "codex_cli"
+    assert project_jobs[0].backend == "codex_cli"
+    assert project_jobs[0].metadata["execution_mode"] == "read_only"
+
+
+def test_project_manager_followup_message_does_not_launch_overlapping_task(tmp_path):
+    orchestrator, repository, _ = build_test_orchestrator(tmp_path)
+    project = orchestrator.create_saved_project(
+        name="No Overlap",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="full",
+        notes=None,
+    )
+
+    first = orchestrator.submit_project_manager_message(
+        project.id,
+        "Find something to improve.",
+        urgency="normal",
+        execution_mode="safe_changes",
+    )
+    second = orchestrator.submit_project_manager_message(
+        project.id,
+        "Also watch for wasted space on the page.",
+        urgency="normal",
+        execution_mode="safe_changes",
+    )
+    project_jobs = repository.list_project_jobs(project.id, limit=10)
+
+    assert first.state.workflow_state == "running_current_task"
+    assert second.state.workflow_state == "running_current_task"
+    assert len(project_jobs) == 1
 
 
 def test_project_manager_message_history_is_bounded(tmp_path):

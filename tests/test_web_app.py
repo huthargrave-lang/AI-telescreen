@@ -683,7 +683,7 @@ def test_project_detail_renders_project_manager_summary(tmp_path):
     assert "Project Manager" in detail.text
     assert "Latest Reply" in detail.text
     assert "Current Task Status" in detail.text
-    assert "Pause for manual verification" in detail.text
+    assert "Manual verification" in detail.text
     assert "manual testing needed" in detail.text
     assert "Manual Test Checklist" in detail.text
     assert "Recent Changes" in detail.text
@@ -743,6 +743,36 @@ def test_project_detail_project_manager_composer_submits_and_renders_history(tmp
     assert "Review the codebase and tell me what to do next." in submitted.text
     assert "read-only review" in submitted.text
     assert "Show details" in submitted.text
+
+
+def test_project_manager_composer_uses_coding_agent_language(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Composer Labels",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="label coverage",
+    )
+
+    detail = client.get(f"/projects/{project.id}")
+
+    assert detail.status_code == 200
+    assert "Planner: Project Manager" in detail.text
+    assert "Coding Agent" in detail.text
+    assert "Auto (available, prefers Codex)" in detail.text
+    assert "Claude (use the best available Claude executor)" in detail.text
 
 
 def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_path):
@@ -865,9 +895,57 @@ def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
     assert followup.status_code == 200
     assert "Continue the current AI Telescreen project-manager discussion" in followup.text
     assert advisory.status_code == 200
-    assert "Stored the latest recommendation as project guidance for future manager decisions." in advisory.text
+    assert "Stored the latest recommendation as project guidance in the manager" in advisory.text
     assert "guidance saved" in advisory.text
     assert "compact memory" in advisory.text
+
+
+def test_project_manager_followup_while_waiting_on_worker_explains_why_no_new_task_started(tmp_path):
+    context = bootstrap(tmp_path)
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    created_project = client.post(
+        "/projects",
+        data={
+            "name": "Waiting Explanation",
+            "repo_path": str(tmp_path),
+            "default_backend": "messages_api",
+            "default_provider": "anthropic",
+            "default_base_branch": "main",
+            "autonomy_mode": "full",
+            "notes": "waiting explanation coverage",
+        },
+        follow_redirects=False,
+    )
+    project_id = Path(urlparse(created_project.headers["location"]).path).name
+    client.post(
+        f"/projects/{project_id}/manager/messages",
+        data={
+            "message": "Find something to improve.",
+            "urgency": "normal",
+            "coding_agent": "claude",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+
+    followup = client.post(
+        f"/projects/{project_id}/manager/messages",
+        data={
+            "message": "Also watch for wasted space on the page.",
+            "urgency": "normal",
+            "coding_agent": "claude",
+            "execution_mode": "safe_changes",
+        },
+        follow_redirects=True,
+    )
+
+    assert followup.status_code == 200
+    assert "Your follow-up was saved. The Project Manager is still waiting for a worker to pick up the active task." in followup.text
+    assert "Manager status:" in followup.text
+    assert "A worker must be active to pick it up." in followup.text
+    assert len(context.repository.list_project_jobs(project_id, limit=10)) == 1
 
 
 def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp_path):
@@ -909,7 +987,7 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     continued = client.post(f"/projects/{project.id}/manager/continue", follow_redirects=False)
 
     assert submitted.status_code == 200
-    assert "launched the current task" in submitted.text
+    assert "queued the current task and is waiting for a worker" in submitted.text
     assert detail.status_code == 200
     assert "Waiting on your decision" in detail.text
     assert "Keep Going" in detail.text

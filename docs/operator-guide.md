@@ -59,7 +59,9 @@
 - The project page is now the main place to review dense manager bullet sections, recent ingested outcomes, and any draft follow-up task.
 - When the manager recommends `launch_followup_job`, the browser can prefill a task draft or launch that draft directly with operator approval.
 - The top of each project page now includes a Project Manager composer so you can type a new direction and get back a fresh structured recommendation without leaving the browser.
-- Composer hints are lightweight and advisory: urgency nudges draft priority, backend preference nudges the recommended backend, and execution mode nudges whether the next draft should stay read-only, make safe changes, or do a full coding pass.
+- Composer hints are lightweight and advisory: urgency nudges draft priority, Coding Agent chooses which executor should handle launched work, and execution mode nudges whether the next draft should stay read-only, make safe changes, or do a full coding pass.
+- The Project Manager is the planner and memory layer. The Coding Agent selector does not change the manager's own brain.
+- `Auto` means "use the best available coding agent, preferring Codex when available."
 - Each saved project also now has an autonomy mode:
   - `minimal`: asks before every task and never auto-enqueues work
   - `partial`: runs the current supervised step, reports back, then asks whether it should keep going
@@ -73,9 +75,11 @@
 - The primary project-page actions are human-first: `Run it`, `Edit`, `Ask Follow-up`, `Keep Going`, and `Store as Project Guidance`.
 - Raw decision labels, confidence, full draft prompts, and rationale are still available, but they live behind `Show details` instead of dominating the page.
 - `Store as Project Guidance` records the current guidance in compact manager memory without launching work.
+- Project guidance, operator prompts, manager replies, job outcomes, and operator feedback all feed the same compact project memory. Older details are summarized automatically instead of living in separate context buckets.
 - `Ask Follow-up` keeps the conversation going from the same project page instead of forcing you into a separate job flow.
 - In partial autonomy, the manager can launch the current obvious step, then come back and ask whether it should continue instead of silently looping forever.
-- In full autonomy, the manager can continue iterating, but it still stops for manual testing, low confidence, ambiguity, repeated failure, or session/task-count limits.
+- In full autonomy, the manager can continue iterating, and it now auto-starts obvious low-risk first steps such as read-only reviews instead of asking first. It still stops for manual testing, low confidence, ambiguity, repeated failure, or session/task-count limits.
+- If you send a follow-up while the manager is already waiting on a worker, waiting on your continue decision, or paused for manual testing, AI Telescreen now says that explicitly instead of leaving the page feeling dead.
 - Recent Project Manager conversation is stored in a bounded durable history so follow-up stays grounded without becoming an unbounded transcript dump.
 - The same project page now includes an Operator Feedback form for manual-test outcomes and browser observations.
 - Use Operator Feedback when you want the next recommendation to react to what a human actually saw, such as layout problems, broken actions, blocked settings, diagnostics issues, or screenshot-backed UI regressions.

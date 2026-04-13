@@ -25,9 +25,10 @@
     <div class="split">
       <div>
         <h2 style="margin-top:0;">Talk to Project Manager</h2>
-        <div class="meta">Ask what to do next, then choose whether to run it.</div>
+        <div class="meta">Planner: Project Manager. Coding Agent only affects launched tasks.</div>
       </div>
       <div class="pill-row">
+        <span class="pill small">planner</span>
         <span class="pill small">{{ project_manager.display.workflow_label | replace("_", " ") }}</span>
         <span class="pill small">{{ project_manager.state.current_phase | replace("_", " ") }}</span>
         {% if project_manager.state.needs_manual_testing %}
@@ -55,10 +56,10 @@
             </select>
           </label>
           <label>
-            <span class="meta">Backend</span><br />
-            <select name="backend_preference">
-              {% for backend_name in available_backends %}
-                <option value="{{ backend_name }}" {% if manager_form_values.backend_preference == backend_name %}selected{% endif %}>{{ backend_name }}</option>
+            <span class="meta">Coding Agent</span><br />
+            <select name="coding_agent">
+              {% for option in coding_agent_options %}
+                <option value="{{ option.value }}" {% if manager_form_values.coding_agent == option.value %}selected{% endif %}>{{ option.label }}{% if option.hint %} ({{ option.hint }}){% endif %}</option>
               {% endfor %}
             </select>
           </label>
@@ -72,6 +73,7 @@
             </select>
           </label>
         </div>
+        <div class="meta" style="margin-top: 10px;">Coding Agent chooses the executor for launched work. The Project Manager stays the planner and memory layer.</div>
       </details>
       <div class="toolbar">
         <button type="submit">Ask Project Manager</button>
@@ -127,6 +129,10 @@
         </div>
       </div>
 
+      <div class="value-block" style="margin-top: 12px;">
+        <strong>Manager status:</strong> {{ project_manager.session.detail }}
+      </div>
+
       <div class="toolbar" style="margin-top: 12px;">
         {% if project_manager.response.decision == "launch_followup_job" and project_manager.response.draft_task and project_manager.state.workflow_state != "running_current_task" %}
           <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
@@ -146,7 +152,7 @@
           <button type="submit" class="secondary">Store as Project Guidance</button>
         </form>
       </div>
-      <div class="meta" style="margin-top: 8px;">Project guidance stays in the manager's compact memory without launching work.</div>
+      <div class="meta" style="margin-top: 8px;">Project guidance is saved into the manager's compact project memory for future decisions without launching work.</div>
 
       <details class="disclosure" style="margin-top: 14px;">
         <summary class="pill disclosure-toggle" style="display: inline-flex;">Show details</summary>
@@ -394,9 +400,10 @@
         </div>
       </div>
       <div>
-        <div class="meta">Compact project memory</div>
+        <div class="meta">Project guidance and compact memory</div>
         <div class="value-block">
           <div>{{ project_manager.display.memory_summary }}</div>
+          <div class="meta" style="margin-top: 10px;">Project guidance, operator prompts, manager replies, job outcomes, and feedback all feed the same compact memory.</div>
           {% if project_manager.display.project_guidance %}
             <div style="margin-top: 12px;">
               <div class="meta">Saved guidance</div>
@@ -529,8 +536,8 @@
                     {% if message.urgency %}
                       <span class="pill small">{{ message.urgency }}</span>
                     {% endif %}
-                    {% if message.backend_preference %}
-                      <span class="pill small">{{ message.backend_preference }}</span>
+                    {% if message.coding_agent_label %}
+                      <span class="pill small">{{ message.coding_agent_label }}</span>
                     {% endif %}
                     {% if message.execution_mode %}
                       <span class="pill small">{{ message.execution_mode }}</span>

@@ -50,6 +50,21 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     def _available_backends() -> list[str]:
         return sorted(orchestrator.backends.keys())
 
+    def _coding_agent_options() -> list[dict[str, str]]:
+        return orchestrator.describe_coding_agent_options()
+
+    def _coding_agent_form_value(value: Optional[str]) -> str:
+        alias = orchestrator.coding_agent_alias_for_backend(value)
+        return alias or "auto"
+
+    def _coding_agent_label(value: Optional[str]) -> Optional[str]:
+        alias = _coding_agent_form_value(value)
+        return {
+            "auto": "Auto",
+            "codex": "Codex",
+            "claude": "Claude",
+        }.get(alias, value)
+
     def _available_providers() -> list[str]:
         return sorted(
             {job.provider for job in orchestrator.list_jobs(limit=200)}
@@ -256,6 +271,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     "message_type": message.metadata.get("message_type"),
                     "urgency": message.metadata.get("urgency"),
                     "backend_preference": message.metadata.get("backend_preference"),
+                    "coding_agent_label": _coding_agent_label(message.metadata.get("backend_preference")),
                     "execution_mode": message.metadata.get("execution_mode"),
                     "decision": (
                         message.metadata.get("decision")
@@ -489,7 +505,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return {
             "message": "",
             "urgency": "normal",
-            "backend_preference": "auto",
+            "coding_agent": "auto",
             "execution_mode": "",
         }
 
@@ -530,7 +546,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             values["execution_mode"] = "read_only"
         draft_task = response.get("draft_task") or {}
         if draft_task.get("backend"):
-            values["backend_preference"] = draft_task["backend"]
+            values["coding_agent"] = _coding_agent_form_value(draft_task["backend"])
         if draft_task.get("execution_mode"):
             values["execution_mode"] = draft_task["execution_mode"]
         if form_values:
@@ -667,7 +683,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "manager_error": manager_error,
             "feedback_form_values": {**_default_feedback_form_values(), **(feedback_form_values or {})},
             "feedback_error": feedback_error,
-            "available_backends": ["auto", *_available_backends()],
+            "coding_agent_options": _coding_agent_options(),
         }
 
     def _job_form_values_from_job(job_id: str) -> dict:
@@ -1178,10 +1194,11 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     @app.post("/projects/{project_id}/manager/messages", response_class=HTMLResponse)
     async def submit_project_manager_message(request: Request, project_id: str):
         form = await _parse_form_values(request)
+        session_before = orchestrator.describe_project_manager_session(project_id)
         manager_form_values = {
             "message": str(form.get("message") or ""),
             "urgency": str(form.get("urgency") or "normal"),
-            "backend_preference": str(form.get("backend_preference") or "auto"),
+            "coding_agent": str(form.get("coding_agent") or form.get("backend_preference") or "auto"),
             "execution_mode": str(form.get("execution_mode") or ""),
         }
         try:
@@ -1189,7 +1206,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 project_id,
                 manager_form_values["message"],
                 urgency=manager_form_values["urgency"],
-                backend_preference=manager_form_values["backend_preference"],
+                backend_preference=manager_form_values["coding_agent"],
                 execution_mode=manager_form_values["execution_mode"] or None,
             )
         except Exception as exc:
@@ -1204,11 +1221,32 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 ),
                 status_code=400,
             )
-        notice = "Project Manager updated the project plan and draft recommendation."
-        if snapshot.state.workflow_state == "running_current_task":
-            notice = "The Project Manager launched the current task and will report back after it finishes."
-        elif snapshot.state.workflow_state == "awaiting_continue_decision":
-            notice = "The Project Manager finished the current step and is waiting for your continue decision."
+        session_after = orchestrator.describe_project_manager_session(project_id)
+        notice = "Project Manager updated the plan and compact project memory."
+        same_active_job = (
+            session_before.active_managed_job_id
+            and session_before.active_managed_job_id == session_after.active_managed_job_id
+        )
+        if session_after.workflow_state == "running_current_task":
+            if same_active_job:
+                if session_after.waiting_on_worker:
+                    notice = (
+                        "Your follow-up was saved. The Project Manager is still waiting for a worker to pick up the active task."
+                    )
+                else:
+                    notice = (
+                        "Your follow-up was saved. The Project Manager is waiting for the active task result before it launches anything else."
+                    )
+            elif session_after.waiting_on_worker:
+                notice = "The Project Manager queued the current task and is waiting for a worker to pick it up."
+            else:
+                notice = "The Project Manager launched the current task and will report back after it finishes."
+        elif session_after.workflow_state == "awaiting_continue_decision":
+            notice = "Your follow-up was saved. The Project Manager is waiting on your decision before it launches another task."
+        elif session_after.workflow_state == "blocked_on_manual_test":
+            notice = "Your follow-up was saved. The Project Manager is paused until manual testing is complete."
+        elif session_after.workflow_state == "awaiting_confirmation":
+            notice = "The Project Manager drafted the next step and is waiting for your approval before it launches work."
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
@@ -1263,7 +1301,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
-            notice="Stored the latest recommendation as project guidance for future manager decisions.",
+            notice="Stored the latest recommendation as project guidance in the manager's compact project memory.",
         )
 
     @app.post("/projects/{project_id}/autonomy")

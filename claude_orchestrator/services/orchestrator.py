@@ -173,6 +173,7 @@ class OrchestratorService:
     """Coordinates persistence, retries, recovery, and backend execution."""
 
     PROJECT_MANAGER_FULL_AUTONOMY_LIMIT = 3
+    CLAUDE_CODING_BACKEND_PREFERENCE = ("claude_code_cli", "messages_api", "message_batches")
 
     def __init__(
         self,
@@ -189,6 +190,82 @@ class OrchestratorService:
         self.config_path = config_path
         self.retry_policy = RetryPolicy(config.retry)
         self.project_manager = ProjectManagerService(repository)
+
+    def preferred_claude_coding_backend(self) -> Optional[str]:
+        for backend_name in self.CLAUDE_CODING_BACKEND_PREFERENCE:
+            if backend_name in self.backends:
+                return backend_name
+        return None
+
+    def preferred_auto_coding_backend(self, *, default_backend: Optional[str] = None) -> Optional[str]:
+        if "codex_cli" in self.backends:
+            return "codex_cli"
+        if default_backend and default_backend in self.backends:
+            return default_backend
+        claude_backend = self.preferred_claude_coding_backend()
+        if claude_backend:
+            return claude_backend
+        if self.config.default_backend in self.backends:
+            return self.config.default_backend
+        return next(iter(sorted(self.backends.keys())), None)
+
+    def resolve_coding_agent_preference(
+        self,
+        preference: Optional[str],
+        *,
+        default_backend: Optional[str] = None,
+    ) -> Optional[str]:
+        value = str(preference or "").strip().lower()
+        if not value or value == "auto":
+            return self.preferred_auto_coding_backend(default_backend=default_backend)
+        if value == "codex":
+            if "codex_cli" not in self.backends:
+                raise ValueError("Codex is not available as a coding agent in this AI Telescreen setup.")
+            return "codex_cli"
+        if value == "claude":
+            claude_backend = self.preferred_claude_coding_backend()
+            if claude_backend is None:
+                raise ValueError("Claude is not available as a coding agent in this AI Telescreen setup.")
+            return claude_backend
+        if value in self.backends:
+            return value
+        raise ValueError("Coding Agent must be Auto, Codex, Claude, or a valid configured backend.")
+
+    def coding_agent_alias_for_backend(self, backend_name: Optional[str]) -> str:
+        value = str(backend_name or "").strip()
+        if not value:
+            return "auto"
+        if value == "codex_cli":
+            return "codex"
+        if value in self.CLAUDE_CODING_BACKEND_PREFERENCE:
+            return "claude"
+        return value
+
+    def describe_coding_agent_options(self) -> List[Dict[str, str]]:
+        options: List[Dict[str, str]] = [
+            {
+                "value": "auto",
+                "label": "Auto",
+                "hint": "available, prefers Codex",
+            }
+        ]
+        if "codex_cli" in self.backends:
+            options.append(
+                {
+                    "value": "codex",
+                    "label": "Codex",
+                    "hint": "use Codex for launched coding tasks",
+                }
+            )
+        if self.preferred_claude_coding_backend() is not None:
+            options.append(
+                {
+                    "value": "claude",
+                    "label": "Claude",
+                    "hint": "use the best available Claude executor",
+                }
+            )
+        return options
 
     def enqueue(self, request: EnqueueJobRequest) -> Job:
         backend_name = request.backend or self.config.default_backend
@@ -728,11 +805,15 @@ class OrchestratorService:
         execution_mode: Optional[str] = None,
     ):
         project = self.repository.get_saved_project(project_id)
+        resolved_backend_preference = self.resolve_coding_agent_preference(
+            backend_preference,
+            default_backend=project.default_backend,
+        )
         snapshot = self.project_manager.submit_project_manager_message(
             project_id,
             message,
             urgency=urgency,
-            backend_preference=backend_preference,
+            backend_preference=resolved_backend_preference,
             execution_mode=execution_mode,
         )
         return self._progress_project_manager_autonomy(
@@ -1718,6 +1799,31 @@ class OrchestratorService:
             return snapshot
         if require_draft and (response.decision != "launch_followup_job" or response.draft_task is None):
             raise ValueError("This project does not currently have a recommended task ready to continue.")
+        if trigger == "message":
+            if snapshot.state.workflow_state == "running_current_task" and snapshot.state.active_job_id:
+                return self.project_manager.update_workflow_state(
+                    project.id,
+                    workflow_state="running_current_task",
+                    active_job_id=snapshot.state.active_job_id,
+                    active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                    auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+                )
+            if snapshot.state.workflow_state == "awaiting_continue_decision":
+                return self.project_manager.update_workflow_state(
+                    project.id,
+                    workflow_state="awaiting_continue_decision",
+                    active_job_id=None,
+                    active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                    auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+                )
+            if snapshot.state.workflow_state == "blocked_on_manual_test":
+                return self.project_manager.update_workflow_state(
+                    project.id,
+                    workflow_state="blocked_on_manual_test",
+                    active_job_id=None,
+                    active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                    auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+                )
         if response.needs_manual_testing or response.decision == "request_manual_test":
             return self.project_manager.update_workflow_state(
                 project.id,
