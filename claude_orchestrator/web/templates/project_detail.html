@@ -5,16 +5,6 @@
     <div>
       <a href="/projects">← Back to Projects</a>
       <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ project.name }}</h1>
-      <div class="pill-row" style="margin-top: 12px;">
-        <span class="pill small">{{ project_display.autonomy_mode | title }} autonomy</span>
-        {% for badge in project_manager.session.status_badges %}
-          <span class="pill small {{ badge.class_name }}">{{ badge.label }}</span>
-        {% endfor %}
-        {% if project_manager.session.active_job_status %}
-          <span class="pill small status-pill status-{{ project_manager.session.active_job_status }}">{{ project_manager.session.active_job_status }}</span>
-        {% endif %}
-      </div>
-      <div class="meta" style="margin-top: 10px;">{{ project_manager.session.headline }}</div>
     </div>
     <div class="toolbar">
       <a class="pill" href="/jobs/new?project_id={{ project.id }}">Create Job</a>
@@ -82,351 +72,7 @@
     </form>
   </section>
 
-  <section class="panel" style="margin-top: 18px;">
-    <div class="split">
-      <div>
-        <h2 style="margin-top:0;">Live workspace</h2>
-        <div class="meta">Project Manager plans and reviews. Coding Agent executes the current handoff.</div>
-      </div>
-      <div class="pill-row">
-        {% for badge in project_manager.session.status_badges %}
-          <span class="pill small {{ badge.class_name }}">{{ badge.label }}</span>
-        {% endfor %}
-        {% if project_manager.display.reacting_to_operator_feedback %}
-          <span class="pill small status-pill status-waiting_retry">reacting to operator feedback</span>
-        {% endif %}
-      </div>
-    </div>
-
-    {% if project_manager.response %}
-      <div class="summary-grid two" style="margin-top: 12px;">
-        <div>
-          <div class="meta">Project Manager</div>
-          <div class="value-block">
-            <div class="pill-row">
-              <span class="pill small">planner</span>
-              <span class="pill small">{{ project_manager.session.workflow_label }}</span>
-              <span class="pill small">{{ project_manager.state.current_phase | replace("_", " ") }}</span>
-            </div>
-            {% if project_manager.workspace.manager.chat_turn.operator or project_manager.workspace.manager.chat_turn.manager %}
-              <div class="summary-grid two" style="margin-top: 12px;">
-                {% if project_manager.workspace.manager.chat_turn.operator %}
-                  <div>
-                    <div class="meta">You asked</div>
-                    <div>{{ project_manager.workspace.manager.chat_turn.operator }}</div>
-                  </div>
-                {% endif %}
-                {% if project_manager.workspace.manager.chat_turn.manager %}
-                  <div>
-                    <div class="meta">Manager reply</div>
-                    <div>{{ project_manager.workspace.manager.chat_turn.manager }}</div>
-                  </div>
-                {% endif %}
-              </div>
-            {% endif %}
-            <strong>{{ project_manager.workspace.manager.headline }}</strong>
-            <div style="margin-top: 8px;">{{ project_manager.workspace.manager.detail }}</div>
-            <div class="meta" style="margin-top: 10px;">{{ project_manager.session.detail }}</div>
-
-            <div class="summary-grid two" style="margin-top: 12px;">
-              <div>
-                <div class="meta">What I need next</div>
-                <div><strong>{{ project_manager.workspace.manager.next_need.label }}</strong></div>
-                <div class="meta" style="margin-top: 6px;">{{ project_manager.workspace.manager.next_need.detail }}</div>
-              </div>
-              <div>
-                <div class="meta">Main action</div>
-                {% if project_manager.workspace.manager.primary_action.label %}
-                  <div><strong>{{ project_manager.workspace.manager.primary_action.label }}</strong></div>
-                  <div class="meta" style="margin-top: 6px;">{{ project_manager.workspace.manager.primary_action.detail }}</div>
-                {% else %}
-                  <div><strong>No action button needed</strong></div>
-                  <div class="meta" style="margin-top: 6px;">{{ project_manager.workspace.manager.primary_action.detail }}</div>
-                {% endif %}
-              </div>
-            </div>
-
-            <div class="toolbar" style="margin-top: 12px;">
-              {% if project_manager.workspace.manager.primary_action.kind == "launch_draft" %}
-                <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
-                  <button type="submit">{{ project_manager.workspace.manager.primary_action.label }}</button>
-                </form>
-              {% elif project_manager.workspace.manager.primary_action.kind == "continue" %}
-                <form method="post" action="/projects/{{ project.id }}/manager/continue">
-                  <button type="submit">{{ project_manager.workspace.manager.primary_action.label }}</button>
-                </form>
-              {% elif project_manager.workspace.manager.primary_action.kind == "feedback" %}
-                <a class="pill" href="#feedback-panel">{{ project_manager.workspace.manager.primary_action.label }}</a>
-              {% elif project_manager.workspace.manager.primary_action.kind == "retry_job" and project_manager.workspace.coding_agent.active_job %}
-                <form method="post" action="/jobs/{{ project_manager.workspace.coding_agent.active_job.id }}/retry?next=/projects/{{ project.id }}">
-                  <button type="submit">{{ project_manager.workspace.manager.primary_action.label }}</button>
-                </form>
-              {% endif %}
-              {% if project_manager.response.draft_task %}
-                <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit</a>
-              {% endif %}
-              <a class="pill" href="/projects/{{ project.id }}?manager_followup=1#project-manager-composer">Ask Follow-up</a>
-              <form method="post" action="/projects/{{ project.id }}/manager/save-advisory">
-                <button type="submit" class="secondary">Add to Project Context</button>
-              </form>
-            </div>
-            <div class="meta" style="margin-top: 8px;">Project Context is the manager-owned memory. This saves guidance for future decisions without launching work.</div>
-
-            {% if project_manager.workspace.manager.session_ledger.objective
-                  or project_manager.workspace.manager.session_ledger.changes_this_session
-                  or project_manager.workspace.manager.session_ledger.next_step %}
-              <div style="margin-top: 14px;">
-                <div class="meta">Session ledger</div>
-                <div class="summary-grid two" style="margin-top: 8px;">
-                  {% if project_manager.workspace.manager.session_ledger.objective %}
-                    <div>
-                      <div class="meta">Objective</div>
-                      <div><strong>{{ project_manager.workspace.manager.session_ledger.objective }}</strong></div>
-                      {% if project_manager.workspace.manager.session_ledger.objective_reason %}
-                        <div class="meta" style="margin-top: 6px;">{{ project_manager.workspace.manager.session_ledger.objective_reason }}</div>
-                      {% endif %}
-                    </div>
-                  {% endif %}
-                  {% if project_manager.workspace.manager.session_ledger.latest_result_summary %}
-                    <div>
-                      <div class="meta">Latest result</div>
-                      <div>{{ project_manager.workspace.manager.session_ledger.latest_result_summary }}</div>
-                    </div>
-                  {% endif %}
-                  {% if project_manager.workspace.manager.session_ledger.changes_this_session %}
-                    <div>
-                      <div class="meta">Changes this session</div>
-                      <ul class="list-compact">
-                        {% for item in project_manager.workspace.manager.session_ledger.changes_this_session %}
-                          <li>{{ item }}</li>
-                        {% endfor %}
-                      </ul>
-                    </div>
-                  {% endif %}
-                  {% if project_manager.workspace.manager.session_ledger.intended_outcomes %}
-                    <div>
-                      <div class="meta">Trying to achieve</div>
-                      <ul class="list-compact">
-                        {% for item in project_manager.workspace.manager.session_ledger.intended_outcomes %}
-                          <li>{{ item }}</li>
-                        {% endfor %}
-                      </ul>
-                    </div>
-                  {% endif %}
-                  {% if project_manager.workspace.manager.session_ledger.current_hypothesis %}
-                    <div>
-                      <div class="meta">Current hypothesis</div>
-                      <div>{{ project_manager.workspace.manager.session_ledger.current_hypothesis }}</div>
-                    </div>
-                  {% endif %}
-                  {% if project_manager.workspace.manager.session_ledger.next_step %}
-                    <div>
-                      <div class="meta">Next likely step</div>
-                      <div>{{ project_manager.workspace.manager.session_ledger.next_step }}</div>
-                      {% if project_manager.workspace.manager.session_ledger.stop_reason %}
-                        <div class="meta" style="margin-top: 6px;">{{ project_manager.workspace.manager.session_ledger.stop_reason }}</div>
-                      {% endif %}
-                    </div>
-                  {% endif %}
-                </div>
-              </div>
-            {% endif %}
-
-            <details class="disclosure" style="margin-top: 14px;">
-              <summary class="pill disclosure-toggle" style="display: inline-flex;">Show details</summary>
-              <div class="summary-grid two" style="margin-top: 12px;">
-                {% for section in project_manager.display.primary_sections %}
-                  <div>
-                    <div class="meta">{{ section["title"] }}</div>
-                    <ul class="list-compact">
-                      {% for item in section["items"] %}
-                        <li>{{ item }}</li>
-                      {% endfor %}
-                    </ul>
-                  </div>
-                {% endfor %}
-                {% for section in project_manager.display.secondary_sections %}
-                  <div>
-                    <div class="meta">{{ section["title"] }}</div>
-                    <ul class="list-compact">
-                      {% for item in section["items"] %}
-                        <li>{{ item }}</li>
-                      {% endfor %}
-                    </ul>
-                  </div>
-                {% endfor %}
-              </div>
-
-              <div class="summary-grid two" style="margin-top: 12px;">
-                <div>
-                  <div class="meta">Manager summary</div>
-                  <div class="stack-compact">
-                    <div class="pill-row">
-                      <span class="pill small">{{ project_manager.response.phase }}</span>
-                      <span class="pill small">{{ project_manager.response.ui_layout_hint }}</span>
-                      <span class="pill small">{{ project_manager.response.decision }}</span>
-                      <span class="pill small">{{ project_manager.response.confidence }}</span>
-                    </div>
-                    <div class="value-block">{{ project_manager.response.reason }}</div>
-                  </div>
-                </div>
-                {% if project_manager.response.draft_task %}
-                  <div>
-                    <div class="meta">Draft settings</div>
-                    <div class="stack-compact">
-                      <div class="pill-row">
-                        <span class="pill small">{{ project_manager.response.draft_task.backend }}</span>
-                        <span class="pill small">{{ project_manager.response.draft_task.task_type }}</span>
-                        <span class="pill small">priority {{ project_manager.response.draft_task.priority }}</span>
-                        {% if project_manager.response.draft_task.provider %}
-                          <span class="pill small">{{ project_manager.response.draft_task.provider }}</span>
-                        {% endif %}
-                        {% if project_manager.response.draft_task.execution_mode %}
-                          <span class="pill small">{{ project_manager.response.draft_task.execution_mode }}</span>
-                        {% endif %}
-                        {% if project_manager.response.draft_task.base_branch %}
-                          <span class="pill small">base {{ project_manager.response.draft_task.base_branch }}</span>
-                        {% endif %}
-                        {% if project_manager.response.draft_task.use_git_worktree %}
-                          <span class="pill small">worktree</span>
-                        {% endif %}
-                      </div>
-                      <div class="meta">Derived from operator message: {{ project_manager.response.draft_task.derived_from_operator_message or "n/a" }}</div>
-                    </div>
-                  </div>
-                {% endif %}
-              </div>
-
-              {% if project_manager.response.draft_task %}
-                <div style="margin-top: 12px;">
-                  <div class="meta">Draft prompt</div>
-                  <div class="value-block"><code>{{ project_manager.response.draft_task.prompt }}</code></div>
-                </div>
-                {% if project_manager.response.draft_task.rationale_bullets %}
-                  <div style="margin-top: 10px;">
-                    <div class="meta">Draft rationale</div>
-                    <ul class="list-compact">
-                      {% for item in project_manager.response.draft_task.rationale_bullets %}
-                        <li>{{ item }}</li>
-                      {% endfor %}
-                    </ul>
-                  </div>
-                {% endif %}
-              {% endif %}
-            </details>
-          </div>
-        </div>
-
-        <div>
-          <div class="meta">Coding Agent</div>
-          <div class="value-block">
-            <div class="pill-row">
-              <span class="pill small">{{ project_manager.workspace.coding_agent.label }}</span>
-              {% if project_manager.workspace.coding_agent.active_job %}
-                <span class="pill small status-pill status-{{ project_manager.workspace.coding_agent.active_job.status }}">{{ project_manager.workspace.coding_agent.active_job.status }}</span>
-              {% endif %}
-            </div>
-            <strong>{{ project_manager.workspace.coding_agent.headline }}</strong>
-            <div style="margin-top: 8px;">{{ project_manager.workspace.coding_agent.detail }}</div>
-
-            <div class="summary-grid two" style="margin-top: 12px;">
-              <div>
-                <div class="meta">What just happened</div>
-                <div><strong>{{ project_manager.workspace.coding_agent.outcome.headline }}</strong></div>
-                <div class="meta" style="margin-top: 6px;">{{ project_manager.workspace.coding_agent.outcome.detail }}</div>
-              </div>
-              <div>
-                <div class="meta">What changed</div>
-                <div><strong>{{ project_manager.workspace.coding_agent.change_summary.detail }}</strong></div>
-              </div>
-            </div>
-
-            <div class="summary-grid two" style="margin-top: 12px;">
-              <div>
-                <div class="meta">{{ project_manager.workspace.coding_agent.changes.label }}</div>
-                <div><strong>{{ project_manager.workspace.coding_agent.changes.count_label }}</strong></div>
-                <div class="meta" style="margin-top: 6px;">{{ project_manager.workspace.coding_agent.changes.detail }}</div>
-                {% if project_manager.workspace.coding_agent.changes.files %}
-                  <div class="pill-row" style="margin-top: 8px;">
-                    {% for item in project_manager.workspace.coding_agent.changes.files %}
-                      {% if item.href %}
-                        <a class="pill small" href="{{ item.href }}" title="{{ item.path }}">{{ item.label }}</a>
-                      {% else %}
-                        <span class="pill small" title="{{ item.path }}">{{ item.label }}</span>
-                      {% endif %}
-                    {% endfor %}
-                  </div>
-                {% endif %}
-                {% if project_manager.workspace.coding_agent.changes.action_label and project_manager.workspace.coding_agent.changes.action_href %}
-                  <div class="toolbar compact" style="margin-top: 8px;">
-                    <a class="pill" href="{{ project_manager.workspace.coding_agent.changes.action_href }}">{{ project_manager.workspace.coding_agent.changes.action_label }}</a>
-                  </div>
-                {% endif %}
-              </div>
-              <div>
-                <div class="meta">{{ project_manager.workspace.coding_agent.test_next.headline }}</div>
-                <div class="meta" style="margin-top: 6px;">{{ project_manager.workspace.coding_agent.test_next.detail }}</div>
-                {% if project_manager.workspace.coding_agent.test_next.checklist_items %}
-                  <ul class="list-compact" style="margin-top: 8px;">
-                    {% for item in project_manager.workspace.coding_agent.test_next.checklist_items %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
-              </div>
-            </div>
-
-            {% if project_manager.workspace.coding_agent.active_job %}
-              {% set active_job = project_manager.workspace.coding_agent.active_job %}
-              <div class="summary-grid two" style="margin-top: 12px;">
-                <div>
-                  <div class="meta">Active job</div>
-                  <a href="/jobs/{{ active_job.id }}" title="{{ active_job.id }}">
-                    <span class="mono-inline">{{ active_job.short_id }}</span>
-                  </a>
-                </div>
-                <div>
-                  <div class="meta">Last activity</div>
-                  <div>{{ active_job.last_activity_label or "n/a" }}</div>
-                </div>
-                <div>
-                  <div class="meta">Current phase</div>
-                  <div>{{ active_job.latest_phase or "waiting" }}</div>
-                </div>
-                <div>
-                  <div class="meta">Result</div>
-                  <div>{{ active_job.lifecycle.headline }}</div>
-                </div>
-              </div>
-              {% if project_manager.workspace.coding_agent.preview %}
-                <div class="meta" style="margin-top: 10px;">{{ project_manager.workspace.coding_agent.preview }}</div>
-              {% endif %}
-            {% elif project_manager.workspace.coding_agent.preview %}
-              <div class="meta" style="margin-top: 10px;">{{ project_manager.workspace.coding_agent.preview }}</div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-
-      {% if project_manager.workspace.timeline %}
-        <div style="margin-top: 14px;">
-          <div class="meta">Live handoff</div>
-          <div class="activity-list">
-            {% for item in project_manager.workspace.timeline %}
-              <div class="activity-row">
-                <div class="stack-compact tight">
-                  <div><strong>{{ item.label }}</strong></div>
-                  <div class="meta">{{ item.text }}</div>
-                </div>
-              </div>
-            {% endfor %}
-          </div>
-        </div>
-      {% endif %}
-    {% else %}
-      <p class="meta" style="margin-top: 12px;">No project-manager reply yet. Start with a message above.</p>
-    {% endif %}
-  </section>
+  {% include "partials/project_workspace_live.html" %}
 
   <details class="panel disclosure" style="margin-top: 18px;" id="details-panel">
     <summary class="section-summary disclosure-toggle">
@@ -984,4 +630,64 @@
       </section>
     </div>
   </details>
+  <script>
+    (() => {
+      const regionId = "project-workspace-live-region";
+      let pollTimer = null;
+      let inFlight = false;
+
+      const scheduleNextPoll = () => {
+        window.clearTimeout(pollTimer);
+        const region = document.getElementById(regionId);
+        if (!region) return;
+        const baseInterval = Number.parseInt(region.dataset.refreshInterval || "15", 10);
+        if (!Number.isFinite(baseInterval) || baseInterval <= 0) return;
+        const visibilityMultiplier = document.visibilityState === "hidden" ? 2 : 1;
+        pollTimer = window.setTimeout(refreshWorkspace, baseInterval * visibilityMultiplier * 1000);
+      };
+
+      const refreshWorkspace = async () => {
+        const region = document.getElementById(regionId);
+        if (!region || inFlight) {
+          scheduleNextPoll();
+          return;
+        }
+        const refreshUrl = region.dataset.refreshUrl;
+        if (!refreshUrl) {
+          scheduleNextPoll();
+          return;
+        }
+        inFlight = true;
+        try {
+          const response = await fetch(refreshUrl, {
+            headers: {
+              "X-Requested-With": "XMLHttpRequest",
+            },
+            credentials: "same-origin",
+          });
+          if (!response.ok) {
+            throw new Error(`Workspace refresh failed with ${response.status}`);
+          }
+          const html = (await response.text()).trim();
+          if (html) {
+            const template = document.createElement("template");
+            template.innerHTML = html;
+            const nextRegion = template.content.firstElementChild;
+            if (nextRegion) {
+              region.replaceWith(nextRegion);
+            }
+          }
+        } catch (error) {
+          console.warn("AI Telescreen workspace refresh skipped:", error);
+        } finally {
+          inFlight = false;
+          scheduleNextPoll();
+        }
+      };
+
+      document.addEventListener("visibilitychange", scheduleNextPoll);
+      window.addEventListener("pageshow", scheduleNextPoll);
+      scheduleNextPoll();
+    })();
+  </script>
 {% endblock %}

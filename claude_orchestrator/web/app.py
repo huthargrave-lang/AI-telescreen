@@ -450,6 +450,39 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "status_badges": badges[:4],
         }
 
+    def _project_workspace_refresh(session: dict) -> dict:
+        workflow_state = str(session.get("workflow_state") or "")
+        active_status = str(session.get("active_job_status") or "")
+        if workflow_state == "running_current_task":
+            if active_status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value, JobStatus.WAITING_RETRY.value}:
+                return {
+                    "interval_seconds": 4,
+                    "mode": "active",
+                    "label": "Live updates every 4s while the current task is active.",
+                }
+            return {
+                "interval_seconds": 6,
+                "mode": "settling",
+                "label": "Refreshing every 6s while the manager settles the latest result.",
+            }
+        if workflow_state in {"awaiting_continue_decision", "blocked_on_manual_test"}:
+            return {
+                "interval_seconds": 6,
+                "mode": "paused",
+                "label": "Refreshing every 6s while the manager is waiting on the next decision.",
+            }
+        if workflow_state == "awaiting_confirmation":
+            return {
+                "interval_seconds": 15,
+                "mode": "idle",
+                "label": "Checking every 15s while the workspace is idle.",
+            }
+        return {
+            "interval_seconds": 20,
+            "mode": "idle",
+            "label": "Checking every 20s while no manager-owned task is active.",
+        }
+
     def _managed_focus_job(session: dict, jobs: list[dict]) -> Optional[dict]:
         jobs_by_id = {job["id"]: job for job in jobs}
         focus_job_id = session.get("active_job_id")
@@ -882,6 +915,22 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "timeline": timeline[:4],
         }
 
+    def _build_project_workspace_view(project_id: str) -> dict:
+        project = orchestrator.get_saved_project(project_id)
+        jobs = [serialize_job(job) for job in orchestrator.list_project_jobs(project_id, limit=20)]
+        project_manager = serialize_project_manager(orchestrator.get_project_manager_snapshot(project_id))
+        project_manager["session"] = serialize_project_manager_session(
+            orchestrator.describe_project_manager_session(project_id)
+        )
+        project_manager["workspace"] = _project_manager_live_surface(project_manager, jobs)
+        project_manager["refresh"] = _project_workspace_refresh(project_manager["session"])
+        return {
+            "project": project,
+            "project_display": serialize_project(project),
+            "jobs": jobs,
+            "project_manager": project_manager,
+        }
+
     def _manager_run_now_worker_id(project_id: str, job_id: str) -> str:
         return f"web-manager-{project_id[:8]}-{job_id[:8]}"
 
@@ -1250,19 +1299,15 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         feedback_form_values: Optional[dict] = None,
         feedback_error: Optional[str] = None,
     ) -> dict:
-        project = orchestrator.get_saved_project(project_id)
-        jobs = [serialize_job(job) for job in orchestrator.list_project_jobs(project_id, limit=20)]
+        workspace_view = _build_project_workspace_view(project_id)
+        project = workspace_view["project"]
         integration_summary = orchestrator.get_project_integration_summary(project_id)
-        project_manager = serialize_project_manager(orchestrator.get_project_manager_snapshot(project_id))
-        project_manager["session"] = serialize_project_manager_session(
-            orchestrator.describe_project_manager_session(project_id)
-        )
-        project_manager["workspace"] = _project_manager_live_surface(project_manager, jobs)
+        project_manager = workspace_view["project_manager"]
         return {
             "request": request,
             "project": project,
-            "project_display": serialize_project(project),
-            "jobs": jobs,
+            "project_display": workspace_view["project_display"],
+            "jobs": workspace_view["jobs"],
             "integration": serialize_project_integration(integration_summary),
             "project_manager": project_manager,
             "manager_form_values": _project_manager_composer_values(
@@ -1767,6 +1812,16 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 project_id,
                 manager_followup=bool(manager_followup),
             ),
+        )
+
+    @app.get("/projects/{project_id}/workspace", response_class=HTMLResponse)
+    async def project_workspace_partial(request: Request, project_id: str):
+        context = _build_project_workspace_view(project_id)
+        context["request"] = request
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/project_workspace_live.html",
+            context=context,
         )
 
     @app.post("/projects/{project_id}/launch")

@@ -70,6 +70,7 @@
 - The top of the project page now uses a live Project Manager → Coding Agent workspace instead of a stale latest-reply card.
 - The left side shows what the Project Manager is doing as planner or reviewer. The right side shows the current Coding Agent handoff, including queued, running, completed, failed, or waiting-to-retry task state.
 - A compact session ledger stays visible in that workspace so you can see the current objective, what changed this session, what those changes were meant to accomplish, the current working hypothesis, the next likely step, and why the manager paused.
+- That workspace now auto-refreshes in place while manager-owned work is active. AI Telescreen uses a lightweight polling loop on the workspace surface only, so queued/running/completed state, session ledger updates, and latest result summaries stay current without a full page reload.
 - Manager-launched tasks still use the same queue and worker model as every other job, but browser project-page launches now try to start immediately by using the same run-now claim/process path as the normal browser job controls.
 - `Waiting on worker` now means immediate start was unavailable in that context, so the task stayed queued and AI Telescreen shows that reason directly instead of leaving the queue state unexplained.
 - `Waiting on operator` means the manager finished the current supervised step or needs approval before it continues.

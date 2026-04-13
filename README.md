@@ -234,6 +234,8 @@ The top of the project page now uses a live two-column workspace instead of trea
 - the task is queued, running, completed, failed, or waiting to retry
 - manager reviewed the result and decided what happens next
 
+That live workspace now auto-refreshes in place while manager-owned work is active. AI Telescreen uses a lightweight polling loop on just the project workspace surface, not a heavier streaming subsystem, so queued/running/completed handoff state, session ledger updates, and latest result summaries stay current without a full page reload.
+
 When the Project Manager launches a task from the browser project page, AI Telescreen now tries to start it immediately by reusing the same run-now claim/process flow as the existing browser job controls. In the common browser path, manager-launched work should feel like an active handoff instead of a passive queue drop.
 
 The project page now also exposes live manager-session state so operators can tell, at a glance:

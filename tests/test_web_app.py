@@ -983,6 +983,121 @@ def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_pat
     assert f'href="/jobs/{auto_job.id}"' in submitted.text
 
 
+def test_project_workspace_partial_route_uses_fast_refresh_for_active_manager_task(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Workspace Partial Active",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="partial",
+        notes="workspace partial active coverage",
+    )
+    orchestrator.submit_project_manager_message(
+        project.id,
+        "Start improving this page.",
+        urgency="normal",
+        execution_mode="safe_changes",
+    )
+    job = orchestrator.launch_job_from_project_manager_draft(project.id)
+    context.repository.update_job_status(
+        job.id,
+        target_status=JobStatus.RUNNING,
+        current_status=JobStatus.QUEUED,
+        clear_lease=False,
+        event_type="test.running",
+    )
+
+    partial = client.get(f"/projects/{project.id}/workspace")
+
+    assert partial.status_code == 200
+    assert 'id="project-workspace-live-region"' in partial.text
+    assert f'data-refresh-url="/projects/{project.id}/workspace"' in partial.text
+    assert 'data-refresh-interval="4"' in partial.text
+    assert "Task running" in partial.text
+    assert "Live updates every 4s while the current task is active." in partial.text
+
+
+def test_project_workspace_partial_route_updates_after_manager_task_completion(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Workspace Partial Completed",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        autonomy_mode="partial",
+        notes="workspace partial completed coverage",
+    )
+    orchestrator.submit_project_manager_message(
+        project.id,
+        "Review the codebase and tell me what to do next.",
+        urgency="normal",
+        execution_mode="read_only",
+    )
+    client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=True)
+
+    partial = client.get(f"/projects/{project.id}/workspace")
+
+    assert partial.status_code == 200
+    assert 'data-refresh-interval="6"' in partial.text
+    assert "Waiting on your decision" in partial.text
+    assert "Ready to continue" in partial.text
+    assert "Latest result" in partial.text
+    assert "completed a read-only review" in partial.text
+
+
+def test_project_detail_page_includes_workspace_refresh_loop(tmp_path):
+    context = bootstrap(tmp_path)
+    orchestrator = OrchestratorService(
+        root=context.root,
+        config=context.config,
+        repository=context.repository,
+        backends={"messages_api": CompletedBackend()},
+    )
+    app = build_app(root=tmp_path)
+    client = TestClient(app)
+
+    project = orchestrator.create_saved_project(
+        name="Workspace Refresh Page",
+        repo_path=str(tmp_path),
+        default_backend="messages_api",
+        default_provider="anthropic",
+        default_base_branch="main",
+        default_use_git_worktree=False,
+        notes="workspace refresh page coverage",
+    )
+
+    detail = client.get(f"/projects/{project.id}")
+
+    assert detail.status_code == 200
+    assert 'id="project-workspace-live-region"' in detail.text
+    assert f'data-refresh-url="/projects/{project.id}/workspace"' in detail.text
+    assert "refreshWorkspace" in detail.text
+    assert "Checking every 20s while no manager-owned task is active." in detail.text
+
+
 def test_project_manager_starts_full_autonomy_task_immediately(tmp_path):
     context = bootstrap(tmp_path)
     app = build_app(root=tmp_path)
