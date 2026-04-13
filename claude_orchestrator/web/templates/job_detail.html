@@ -4,12 +4,18 @@
   <div class="header">
     <div>
       <a href="/">← Back</a>
-      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ job_serialized.short_id }}</h1>
-      <p class="subtitle">
-        Provider {{ job.provider }} · backend {{ job.backend }} · task {{ job.task_type }} · attempts {{ job.attempt_count }}/{{ job.max_attempts }}
-      </p>
-      <p class="meta">{{ job_lifecycle.helper_text }}</p>
-      <div class="value-block path" style="margin-top: 12px;" title="{{ job.id }}">{{ job.id }}</div>
+      <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);" title="{{ job.id }}">{{ job_serialized.short_id }}</h1>
+      <div class="pill-row" style="margin-top: 12px;">
+        <span class="pill small status-pill status-{{ job.status.value }}">{{ job.status.value }}</span>
+        <span class="pill small">{{ job.backend }}</span>
+        <span class="pill small">{{ job.provider }}</span>
+        <span class="pill small">{{ job.task_type }}</span>
+        {% if latest_phase %}
+          <span class="pill small">{{ latest_phase }}</span>
+        {% endif %}
+      </div>
+      <div class="meta" style="margin-top: 10px;">{{ job_lifecycle.headline }}</div>
+      <div class="meta" style="margin-top: 4px;">{{ latest_progress_message or job_lifecycle.helper_text }}</div>
     </div>
     <div class="actions">
       {% if job_actions.run_now %}
@@ -27,6 +33,11 @@
           <button type="submit">Retry</button>
         </form>
       {% endif %}
+      {% if project_manager_can_continue and project_link %}
+        <form method="post" action="/projects/{{ project_link.id }}/manager/continue">
+          <button type="submit">Keep Going</button>
+        </form>
+      {% endif %}
       {% if job_actions.cancel %}
         <form method="post" action="/jobs/{{ job.id }}/cancel?next=/jobs/{{ job.id }}">
           <button type="submit" class="secondary">Cancel</button>
@@ -42,9 +53,12 @@
           <button type="submit" class="danger">Delete</button>
         </form>
       {% endif %}
+      {% if artifacts %}
+        <a class="pill" href="#artifacts-section">Open Artifacts</a>
+      {% endif %}
       <a class="pill" href="/jobs/new?from_job={{ job.id }}">Re-run / Edit</a>
-      {% if job.metadata.get("project_id") %}
-        <a class="pill" href="/projects/{{ job.metadata.get('project_id') }}">Project</a>
+      {% if project_link %}
+        <a class="pill" href="/projects/{{ project_link.id }}">{{ project_link.name }}</a>
       {% endif %}
     </div>
   </div>
@@ -57,105 +71,188 @@
       {% include "partials/job_overview.html" %}
     </div>
 
-    {% include "partials/job_integrations.html" %}
+    <div
+      id="job-stream-events"
+      {% if is_active %}hx-get="/partials/jobs/{{ job.id }}/stream-events" hx-trigger="load, every {{ refresh_seconds }}s" hx-swap="innerHTML"{% endif %}
+    >
+      {% include "partials/job_stream_events.html" %}
+    </div>
+  </div>
 
-    <section class="panel">
-      <h2 style="margin-top:0;">Conversation State</h2>
-      <div class="summary-grid">
-        <div>
-          <div class="meta">System prompt</div>
-          <div class="value-block">{{ state.system_prompt or "No system prompt recorded." }}</div>
-        </div>
-        <div>
-          <div class="meta">Compact summary</div>
-          <div class="value-block">{{ state.compact_summary or "No compact summary recorded." }}</div>
-        </div>
-        <div>
-          <div class="meta">Checkpoint</div>
-          <div>{{ state.last_checkpoint_at.isoformat() if state.last_checkpoint_at else "n/a" }}</div>
-        </div>
+  <details class="panel disclosure" style="margin-top: 18px;" id="details-panel">
+    <summary class="section-summary disclosure-toggle">
+      <strong>Details</strong>
+      <span class="meta">paths, timing, retry, workspace</span>
+    </summary>
+    <div class="summary-grid two" style="margin-top: 14px;">
+      <div>
+        <div class="meta">Full job ID</div>
+        <div class="value-block path" title="{{ job.id }}">{{ job.id }}</div>
       </div>
-      <details style="margin-top: 12px;">
-        <summary>Tool context</summary>
-        <pre>{{ state.tool_context | tojson(indent=2) }}</pre>
-      </details>
-    </section>
-  </div>
-
-  <div
-    id="job-stream-events"
-    style="margin-top:18px;"
-    {% if is_active %}hx-get="/partials/jobs/{{ job.id }}/stream-events" hx-trigger="load, every {{ refresh_seconds }}s" hx-swap="innerHTML"{% endif %}
-  >
-    {% include "partials/job_stream_events.html" %}
-  </div>
-
-  <section class="panel" style="margin-top:18px;">
-    <h2 style="margin-top:0;">Runs</h2>
-    {% if runs %}
-      {% for run in runs %}
-        <article style="padding: 12px 0; border-top: 1px solid var(--border);">
-          <div class="summary-grid two">
-            <div>
-              <div class="meta">Timing</div>
-              <div>{{ run.started_at.isoformat() }} → {{ run.ended_at.isoformat() if run.ended_at else "running" }}</div>
-            </div>
-            <div>
-              <div class="meta">Provider</div>
-              <div>{{ run.provider }}</div>
-            </div>
-            <div>
-              <div class="meta">Backend</div>
-              <div>{{ run.backend }}</div>
-            </div>
-            <div>
-              <div class="meta">Exit</div>
-              <div>{{ run.exit_reason or "n/a" }}</div>
-            </div>
-          </div>
-          <details style="margin-top: 12px;">
-            <summary>Run summary</summary>
-            <pre>{{ run.response_summary | tojson(indent=2) }}</pre>
-          </details>
-        </article>
-      {% endfor %}
-    {% else %}
-      <p class="meta">No runs have been recorded yet. Queued jobs will stay here until you run them from the browser or a worker picks them up.</p>
+      <div>
+        <div class="meta">Model</div>
+        <div>{{ job.model or "n/a" }}</div>
+      </div>
+      <div>
+        <div class="meta">Workspace path</div>
+        <div class="value-block path" title="{{ job.workspace_path or 'n/a' }}">{{ job.workspace_path or "n/a" }}</div>
+      </div>
+      <div>
+        <div class="meta">Repo path</div>
+        <div class="value-block path" title="{{ job.metadata.get('repo_path') or 'n/a' }}">{{ job.metadata.get("repo_path") or "n/a" }}</div>
+      </div>
+      <div>
+        <div class="meta">Worktree path</div>
+        <div class="value-block path" title="{{ job.metadata.get('worktree_path') or 'n/a' }}">{{ job.metadata.get("worktree_path") or "n/a" }}</div>
+      </div>
+      <div>
+        <div class="meta">Branch</div>
+        <div>{{ job.metadata.get("branch_name") or "n/a" }}</div>
+      </div>
+      <div>
+        <div class="meta">Base branch</div>
+        <div>{{ job.metadata.get("base_branch") or "n/a" }}</div>
+      </div>
+      <div>
+        <div class="meta">Workspace kind</div>
+        <div>{{ job.metadata.get("workspace_kind") or "directory" }}</div>
+      </div>
+      <div>
+        <div class="meta">Cleanup policy</div>
+        <div>{{ job.metadata.get("cleanup_policy") or "none" }}</div>
+      </div>
+      <div>
+        <div class="meta">Created</div>
+        <div>{{ job.created_at.isoformat() }}</div>
+      </div>
+      <div>
+        <div class="meta">Updated</div>
+        <div>{{ job.updated_at.isoformat() }}</div>
+      </div>
+      <div>
+        <div class="meta">Next retry</div>
+        <div>{{ job.next_retry_at.isoformat() if job.next_retry_at else "n/a" }}</div>
+      </div>
+    </div>
+    {% if job.last_error_message %}
+      <div style="margin-top: 12px;">
+        <div class="meta">Last error</div>
+        <div class="value-block">{{ job.last_error_message }}</div>
+      </div>
     {% endif %}
-  </section>
+  </details>
 
-  <section class="panel" style="margin-top:18px;">
-    <h2 style="margin-top:0;">Events</h2>
-    {% if events %}
-      <div class="table-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Type</th>
-              <th>Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for event in events %}
+  <details class="panel disclosure" style="margin-top: 18px;" id="history-panel">
+    <summary class="section-summary disclosure-toggle">
+      <strong>History</strong>
+      <span class="meta">{{ runs | length }} runs · {{ events | length }} events · {{ stream_events | length }} stream events</span>
+    </summary>
+
+    <div style="margin-top: 14px;">
+      <h2 style="margin-top:0;">Runs</h2>
+      {% if runs %}
+        {% for run in runs %}
+          <article style="padding: 12px 0; border-top: 1px solid var(--border);">
+            <div class="summary-grid two">
+              <div>
+                <div class="meta">Timing</div>
+                <div>{{ run.started_at.isoformat() }} → {{ run.ended_at.isoformat() if run.ended_at else "running" }}</div>
+              </div>
+              <div>
+                <div class="meta">Provider</div>
+                <div>{{ run.provider }}</div>
+              </div>
+              <div>
+                <div class="meta">Backend</div>
+                <div>{{ run.backend }}</div>
+              </div>
+              <div>
+                <div class="meta">Exit</div>
+                <div>{{ run.exit_reason or "n/a" }}</div>
+              </div>
+            </div>
+            <details class="disclosure" style="margin-top: 12px;">
+              <summary class="pill disclosure-toggle" style="display: inline-flex;">Run summary</summary>
+              <pre>{{ run.response_summary | tojson(indent=2) }}</pre>
+            </details>
+          </article>
+        {% endfor %}
+      {% else %}
+        <p class="meta">No runs have been recorded yet. Queued jobs stay here until you run them or a worker picks them up.</p>
+      {% endif %}
+    </div>
+
+    <div style="margin-top: 18px;">
+      <h2 style="margin-top:0;">Durable Stream Events</h2>
+      {% if stream_events %}
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
               <tr>
-                <td>{{ event.timestamp.isoformat() }}</td>
-                <td>{{ event.event_type }}</td>
-                <td><div class="value-block path"><code>{{ event.detail | tojson }}</code></div></td>
+                <th>Timestamp</th>
+                <th>Type</th>
+                <th>Phase</th>
+                <th>Message</th>
               </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <p class="meta">No scheduler events recorded yet. Fresh queued jobs will usually show only minimal activity until they start running.</p>
-    {% endif %}
-  </section>
+            </thead>
+            <tbody>
+              {% for event in stream_events[-30:] %}
+                <tr>
+                  <td>{{ event.timestamp.isoformat() }}</td>
+                  <td>{{ event.event_type }}</td>
+                  <td>{{ event.phase or "n/a" }}</td>
+                  <td>
+                    <div>{{ event.message or "n/a" }}</div>
+                    {% if event.metadata %}
+                      <div class="meta"><code>{{ event.metadata | tojson }}</code></div>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="meta">No stream events recorded yet.</p>
+      {% endif %}
+    </div>
 
-  <section class="panel" style="margin-top:18px;">
-    <h2 style="margin-top:0;">Artifacts</h2>
+    <div style="margin-top: 18px;">
+      <h2 style="margin-top:0;">Scheduler Events</h2>
+      {% if events %}
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Type</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for event in events %}
+                <tr>
+                  <td>{{ event.timestamp.isoformat() }}</td>
+                  <td>{{ event.event_type }}</td>
+                  <td><div class="value-block path"><code>{{ event.detail | tojson }}</code></div></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="meta">No scheduler events recorded yet.</p>
+      {% endif %}
+    </div>
+  </details>
+
+  <details class="panel disclosure" style="margin-top: 18px;" id="artifacts-section">
+    <summary class="section-summary disclosure-toggle">
+      <strong>Artifacts</strong>
+      <span class="meta">{{ artifacts | length }} recorded</span>
+    </summary>
     {% if artifacts %}
-      <div class="table-wrap">
+      <div class="table-wrap" style="margin-top: 14px;">
         <table class="data-table">
           <thead>
             <tr>
@@ -178,7 +275,47 @@
         </table>
       </div>
     {% else %}
-      <p class="meta">No artifacts recorded yet.</p>
+      <p class="meta" style="margin-top: 12px;">No artifacts recorded yet.</p>
     {% endif %}
-  </section>
+  </details>
+
+  <details class="panel disclosure" style="margin-top: 18px;" id="technical-panel">
+    <summary class="section-summary disclosure-toggle">
+      <strong>Technical</strong>
+      <span class="meta">integrations, conversation state, raw metadata</span>
+    </summary>
+
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 14px;">
+      {% include "partials/job_integrations.html" %}
+
+      <section class="panel">
+        <h2 style="margin-top:0;">Conversation State</h2>
+        <div class="summary-grid">
+          <div>
+            <div class="meta">System prompt</div>
+            <div class="value-block">{{ state.system_prompt or "No system prompt recorded." }}</div>
+          </div>
+          <div>
+            <div class="meta">Compact summary</div>
+            <div class="value-block">{{ state.compact_summary or "No compact summary recorded." }}</div>
+          </div>
+          <div>
+            <div class="meta">Checkpoint</div>
+            <div>{{ state.last_checkpoint_at.isoformat() if state.last_checkpoint_at else "n/a" }}</div>
+          </div>
+        </div>
+        <details class="disclosure" style="margin-top: 12px;">
+          <summary class="pill disclosure-toggle" style="display: inline-flex;">Tool context</summary>
+          <pre>{{ state.tool_context | tojson(indent=2) }}</pre>
+        </details>
+      </section>
+    </div>
+
+    <div style="margin-top: 14px;">
+      <details class="disclosure">
+        <summary class="pill disclosure-toggle" style="display: inline-flex;">Raw job metadata</summary>
+        <pre>{{ job.metadata | tojson(indent=2) }}</pre>
+      </details>
+    </div>
+  </details>
 {% endblock %}

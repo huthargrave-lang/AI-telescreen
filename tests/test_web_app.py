@@ -556,7 +556,13 @@ def test_web_tables_render_compact_ids_and_paths(tmp_path):
 
     assert job_detail.status_code == 200
     assert job.id in job_detail.text
-    assert "Raw job metadata" in job_detail.text
+    assert "Summary" in job_detail.text
+    assert "Current Activity" in job_detail.text
+    assert "Details" in job_detail.text
+    assert "History" in job_detail.text
+    assert "Artifacts" in job_detail.text
+    assert "Technical" in job_detail.text
+    assert job_detail.text.count('<details class="panel disclosure"') >= 4
 
 
 def test_web_new_codex_job_run_now_uses_direct_runtime_even_with_stale_template(tmp_path, monkeypatch):
@@ -675,14 +681,19 @@ def test_project_detail_renders_project_manager_summary(tmp_path):
 
     assert detail.status_code == 200
     assert "Project Manager" in detail.text
+    assert "Latest Reply" in detail.text
+    assert "Current Task Status" in detail.text
     assert "Pause for manual verification" in detail.text
     assert "manual testing needed" in detail.text
     assert "Manual Test Checklist" in detail.text
     assert "Recent Changes" in detail.text
     assert "Show details" in detail.text
-    assert "Autonomy and supervision" in detail.text
     assert "Project Manager Session" in detail.text
-    assert "Compact project memory" in detail.text
+    assert "Details" in detail.text
+    assert "History" in detail.text
+    assert "Leave feedback" in detail.text
+    assert "Advanced" in detail.text
+    assert detail.text.count('<details class="panel disclosure"') >= 4
     assert "No task in progress" in detail.text
     assert _short_id(job.id) in detail.text
 
@@ -723,9 +734,11 @@ def test_project_detail_project_manager_composer_submits_and_renders_history(tmp
     assert detail.status_code == 200
     assert "Talk to Project Manager" in detail.text
     assert "Ask Project Manager" in detail.text
+    assert "Options" in detail.text
     assert submitted.status_code == 200
     assert "Store as Project Guidance" in submitted.text
-    assert "Recent Project Manager Conversation" in submitted.text
+    assert "History" in submitted.text
+    assert "Leave feedback" in submitted.text
     assert "Run it" in submitted.text
     assert "Review the codebase and tell me what to do next." in submitted.text
     assert "read-only review" in submitted.text
@@ -892,6 +905,7 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     auto_job = context.repository.list_project_jobs(project.id, limit=10)[0]
     asyncio.run(orchestrator.run_job_now(auto_job.id, worker_id="worker-partial-browser"))
     detail = client.get(f"/projects/{project.id}")
+    job_detail = client.get(f"/jobs/{auto_job.id}")
     continued = client.post(f"/projects/{project.id}/manager/continue", follow_redirects=False)
 
     assert submitted.status_code == 200
@@ -900,6 +914,9 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     assert "Waiting on your decision" in detail.text
     assert "Keep Going" in detail.text
     assert "I finished the current step. Want me to keep going?" in detail.text
+    assert job_detail.status_code == 200
+    assert "Keep Going" in job_detail.text
+    assert f'/projects/{project.id}/manager/continue' in job_detail.text
     assert continued.status_code == 303
 
 
@@ -1033,6 +1050,7 @@ def test_project_feedback_submission_renders_recent_feedback_and_updates_recomme
     )
 
     assert submitted.status_code == 200
+    assert "Leave feedback" in submitted.text
     assert "Operator Feedback" in submitted.text
     assert "reacting to operator feedback" in submitted.text
     assert "project-page-gap.png" in submitted.text

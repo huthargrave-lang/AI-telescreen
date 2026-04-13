@@ -1,95 +1,60 @@
 <section class="panel">
-  <h2 style="margin-top:0;">Overview</h2>
-  <div class="summary-grid two">
+  <div class="split">
     <div>
-      <div class="meta">Status</div>
-      <div><span class="pill small status-pill status-{{ job.status.value }}">{{ job.status.value }}</span></div>
+      <h2 style="margin-top:0;">Summary</h2>
+      <div class="meta">A quick read on what this job is doing or waiting on.</div>
+    </div>
+    <div class="pill-row">
+      <span class="pill small status-pill status-{{ job.status.value }}">{{ job.status.value }}</span>
+      {% if latest_phase %}
+        <span class="pill small">{{ latest_phase }}</span>
+      {% endif %}
+      <span class="pill small">{{ integration.status }}</span>
+    </div>
+  </div>
+
+  <div class="value-block" style="margin-top: 12px;">
+    <strong>{{ job_lifecycle.headline }}</strong>
+    <div class="meta" style="margin-top: 8px;">{{ job_lifecycle.helper_text }}</div>
+  </div>
+
+  <div class="summary-grid two" style="margin-top: 12px;">
+    <div>
+      <div class="meta">Latest progress</div>
+      <div>{{ latest_progress_message or "No live progress line yet." }}</div>
     </div>
     <div>
-      <div class="meta">What this means</div>
-      <div>{{ job_lifecycle.headline }}</div>
+      <div class="meta">Attempts</div>
+      <div>{{ job.attempt_count }}/{{ job.max_attempts }}</div>
     </div>
     <div>
-      <div class="meta">Provider</div>
-      <div>{{ job.provider }}</div>
+      <div class="meta">Workspace</div>
+      <div>
+        {{ job.metadata.get("workspace_kind") or "directory" }}
+        {% if job.metadata.get("branch_name") %}
+          · {{ job.metadata.get("branch_name") }}
+        {% endif %}
+      </div>
     </div>
     <div>
-      <div class="meta">Backend</div>
-      <div>{{ job.backend }}</div>
-    </div>
-    <div>
-      <div class="meta">Model</div>
-      <div>{{ job.model or "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Integration status</div>
-      <div>{{ integration.status }}</div>
-    </div>
-    <div>
-      <div class="meta">Workspace kind</div>
-      <div>{{ job.metadata.get("workspace_kind") or "directory" }}</div>
-    </div>
-    <div>
-      <div class="meta">Cleanup policy</div>
-      <div>{{ job.metadata.get("cleanup_policy") or "none" }}</div>
-    </div>
-    <div>
-      <div class="meta">Branch</div>
-      <div>{{ job.metadata.get("branch_name") or "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Base branch</div>
-      <div>{{ job.metadata.get("base_branch") or "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Created</div>
-      <div>{{ job.created_at.isoformat() }}</div>
-    </div>
-    <div>
-      <div class="meta">Updated</div>
+      <div class="meta">Last update</div>
       <div>{{ job.updated_at.isoformat() }}</div>
     </div>
-    <div>
-      <div class="meta">Next retry</div>
-      <div>{{ job.next_retry_at.isoformat() if job.next_retry_at else "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Lease owner</div>
-      <div>{{ job.lease_owner or "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Lease expiry</div>
-      <div>{{ job.lease_expires_at.isoformat() if job.lease_expires_at else "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Last error code</div>
-      <div>{{ job.last_error_code or "n/a" }}</div>
-    </div>
+    {% if job.next_retry_at %}
+      <div>
+        <div class="meta">Next retry</div>
+        <div>{{ job.next_retry_at.isoformat() }}</div>
+      </div>
+    {% endif %}
+    {% if job.last_error_message %}
+      <div>
+        <div class="meta">Last error</div>
+        <div class="truncate-2" title="{{ job.last_error_message }}">{{ job.last_error_message }}</div>
+      </div>
+    {% endif %}
   </div>
-  <p class="meta" style="margin-top: 12px;">{{ job_lifecycle.helper_text }}</p>
+
   {% if integration.status == "local-only" %}
-    <p class="meta">This task looks local-only right now. No project or user integration config was discovered for this workspace.</p>
+    <div class="meta" style="margin-top: 12px;">This job looks local-only right now.</div>
   {% endif %}
-  <div class="summary-grid" style="margin-top: 12px;">
-    <div>
-      <div class="meta">Workspace path</div>
-      <div class="value-block path" title="{{ job.workspace_path or 'n/a' }}">{{ job.workspace_path or "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Repo path</div>
-      <div class="value-block path" title="{{ job.metadata.get('repo_path') or 'n/a' }}">{{ job.metadata.get("repo_path") or "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Worktree path</div>
-      <div class="value-block path" title="{{ job.metadata.get('worktree_path') or 'n/a' }}">{{ job.metadata.get("worktree_path") or "n/a" }}</div>
-    </div>
-    <div>
-      <div class="meta">Last error</div>
-      <div class="value-block">{{ job.last_error_message or "No recent error recorded." }}</div>
-    </div>
-  </div>
-  <details style="margin-top: 12px;">
-    <summary>Raw job metadata</summary>
-    <pre>{{ job.metadata | tojson(indent=2) }}</pre>
-  </details>
 </section>

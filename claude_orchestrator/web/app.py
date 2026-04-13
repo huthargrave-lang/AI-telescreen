@@ -356,6 +356,33 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     def _job_detail_context(request: Request, job_id: str) -> dict:
         details = orchestrator.inspect(job_id)
         lifecycle = orchestrator.describe_job_lifecycle(details.job)
+        project_link = None
+        project_manager_session = None
+        project_manager_can_continue = False
+        project_id = details.job.metadata.get("project_id")
+        if project_id:
+            try:
+                project = orchestrator.get_saved_project(project_id)
+                project_link = {"id": project.id, "name": project.name}
+                project_manager_session = serialize_project_manager_session(
+                    orchestrator.describe_project_manager_session(project_id)
+                )
+                snapshot = orchestrator.get_project_manager_snapshot(project_id)
+                related_job_ids = {
+                    project_manager_session.get("active_job_id"),
+                    project_manager_session.get("last_completed_job_id"),
+                    project_manager_session.get("last_failed_job_id"),
+                }
+                project_manager_can_continue = bool(
+                    details.job.metadata.get("project_manager_auto_launched")
+                    and snapshot.state.workflow_state == "awaiting_continue_decision"
+                    and snapshot.state.latest_response
+                    and snapshot.state.latest_response.draft_task
+                    and details.job.id in {item for item in related_job_ids if item}
+                )
+            except KeyError:
+                project_link = None
+                project_manager_session = None
         return {
             "request": request,
             "job": details.job,
@@ -371,6 +398,9 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "latest_progress_message": details.latest_progress_message,
             "artifacts": details.artifacts,
             "integration": serialize_integration(details.integration_summary, details.job.backend),
+            "project_link": project_link,
+            "project_manager_session": project_manager_session,
+            "project_manager_can_continue": project_manager_can_continue,
             "refresh_seconds": orchestrator.config.ui.refresh_seconds,
             "is_active": details.job.status == JobStatus.RUNNING,
         }

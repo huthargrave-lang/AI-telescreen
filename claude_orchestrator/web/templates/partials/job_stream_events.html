@@ -1,42 +1,49 @@
 <section class="panel">
-  <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+  <div class="split">
     <div>
-      <h2 style="margin:0;">Live Activity</h2>
-      <div class="meta">Durable process events, recent progress lines, and inferred execution phase.</div>
+      <h2 style="margin:0;">Current Activity</h2>
+      <div class="meta">
+        {% if is_active %}
+          Refreshes while the job is running.
+        {% else %}
+          Most recent durable activity for this job.
+        {% endif %}
+      </div>
     </div>
-    {% if latest_phase %}
-      <span class="pill">Phase: {{ latest_phase }}</span>
+    <div class="pill-row">
+      {% if latest_phase %}
+        <span class="pill small">Phase: {{ latest_phase }}</span>
+      {% endif %}
+      {% if latest_stream_event %}
+        <span class="pill small">{{ latest_stream_event.event_type }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="value-block" style="margin-top: 12px;">
+    <strong>{{ latest_progress_message or job_lifecycle.headline }}</strong>
+    {% if latest_stream_event %}
+      <div class="meta" style="margin-top: 8px;">Last event {{ latest_stream_event.timestamp.isoformat() }}</div>
     {% endif %}
   </div>
 
-  <p style="margin-top: 14px;"><strong>Latest progress:</strong> {{ latest_progress_message or "n/a" }}</p>
-
   {% if stream_events %}
-    <table>
-      <thead>
-        <tr>
-          <th>Timestamp</th>
-          <th>Type</th>
-          <th>Phase</th>
-          <th>Message</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for event in stream_events[-30:] %}
-          <tr>
-            <td>{{ event.timestamp.isoformat() }}</td>
-            <td>{{ event.event_type }}</td>
-            <td>{{ event.phase or "n/a" }}</td>
-            <td>
-              <div>{{ event.message or "n/a" }}</div>
-              {% if event.metadata %}
-                <div class="meta"><code>{{ event.metadata | tojson }}</code></div>
+    <div class="activity-list" style="margin-top: 12px;">
+      {% for event in stream_events[-3:] | reverse %}
+        <div class="activity-row">
+          <div class="stack-compact tight">
+            <div class="pill-row">
+              <span class="pill small">{{ event.event_type }}</span>
+              {% if event.phase %}
+                <span class="pill small">{{ event.phase }}</span>
               {% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+            </div>
+            <div>{{ event.message or "No message recorded." }}</div>
+          </div>
+          <div class="meta">{{ event.timestamp.isoformat() }}</div>
+        </div>
+      {% endfor %}
+    </div>
   {% else %}
     <p class="meta" style="margin-top:14px;">No stream events recorded yet.</p>
   {% endif %}
