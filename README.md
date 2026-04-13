@@ -184,7 +184,7 @@ The manager ingests completed and failed jobs that were launched from a saved pr
 Projects now also carry an explicit Project Manager autonomy mode:
 
 - `minimal`: recommend next steps, ask before every task, never auto-enqueue
-- `partial`: launch the current supervised step, report back, then ask whether to continue
+- `partial`: recommend the next supervised step, wait for approval, then report back and ask whether to continue
 - `full`: keep iterating until a stop condition such as manual testing, low confidence, repeated failure, ambiguity, or the task/session limit
 
 The manager can recommend actions such as:
@@ -213,12 +213,13 @@ The manager now persists a full structured response with fields such as:
 
 The project page renders those fields as dense cards and bullet sections instead of dumping raw JSON. When the manager recommends `launch_followup_job`, AI Telescreen also stores a compact display snapshot plus a structured draft task so the browser can offer operator-controlled `Launch Task`, `Edit Draft`, and `Ask Follow-up` actions without auto-enqueueing work behind the scenes.
 
-The project page now includes a real interactive Project Manager composer at the top. Operators can type a new direction such as "Review the codebase and tell me what to do next" or "Focus on the wasted space in this page", optionally hint urgency, coding agent, and execution mode, and receive a fresh structured response rendered as compact browser cards instead of raw JSON.
+The project page now includes a real interactive Project Manager composer at the top. Operators can type a new direction such as "Review the codebase and tell me what to do next" or "Focus on the wasted space in this page", optionally hint urgency, coding agent, and execution mode, and receive a fresh structured response rendered as compact browser cards instead of raw JSON. Execution Mode now defaults to `Auto`, which lets the manager choose between read-only review, safe changes, or a fuller coding pass based on the request instead of nudging every fresh conversation toward analysis.
 
 Partial autonomy is designed to feel like a supervised project lead:
 
 - you prompt the manager
-- it launches the current obvious task
+- it recommends the next obvious task
+- it waits for your approval to launch that task
 - the coding backend executes the task in the normal queue/worker system
 - the manager reports back in concise human language
 - it recommends the next likely step
@@ -226,7 +227,14 @@ Partial autonomy is designed to feel like a supervised project lead:
 
 Full autonomy stays bounded. It will stop for manual testing, low confidence, ambiguity, repeated failure, or the configured auto-task limit instead of looping forever.
 
-The project page now also exposes a compact Project Manager session card so operators can tell, at a glance:
+The top of the project page now uses a live two-column workspace instead of treating the saved `Latest Reply` as the main status surface. The left side shows the Project Manager as planner and reviewer. The right side shows the Coding Agent as the current executor. That makes the handoff loop easier to read at a glance:
+
+- manager chose the next step
+- manager handed the task to a coding agent
+- the task is queued, running, completed, failed, or waiting to retry
+- manager reviewed the result and decided what happens next
+
+The project page now also exposes live manager-session state so operators can tell, at a glance:
 
 - whether the manager is idle, running, waiting on a worker, waiting on the operator, or paused for manual testing
 - which manager-launched task is currently relevant
@@ -273,7 +281,7 @@ Project Manager and coding execution are also now more clearly separated:
 - coding backends such as `codex_cli`, `messages_api`, and Claude-oriented backends remain the execution tools for repo work
 - manager-generated coding drafts are intentionally short and advisory-first
 
-In full autonomy, the manager now auto-starts obvious low-risk first steps such as a read-only codebase review instead of stopping to ask for permission first. It still stops for manual testing, ambiguity, low confidence, repeated failure, or other explicit safeguards.
+In full autonomy, the manager now auto-starts obvious low-risk first steps such as a read-only codebase review instead of stopping to ask for permission first. It still stops for manual testing, ambiguity, low confidence, repeated failure, or other explicit safeguards. In partial autonomy, the manager now waits for approval before the first task handoff, then comes back with `Keep Going` after each completed supervised step.
 
 When a follow-up is saved but no new task launches, the project page explains why directly. For example, it now calls out when the manager is waiting for a worker, waiting on your continue decision, or paused for manual testing, instead of leaving the page feeling idle or ambiguous.
 

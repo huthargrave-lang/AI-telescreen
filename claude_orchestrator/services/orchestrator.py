@@ -864,12 +864,16 @@ class OrchestratorService:
         *,
         max_attempts: int = 5,
     ) -> Job:
+        project = self.repository.get_saved_project(project_id)
         snapshot = self.get_project_manager_snapshot(project_id)
         response = snapshot.state.latest_response
         if response is None or response.draft_task is None:
             raise ValueError("This project does not currently have a manager-generated task draft to launch.")
         draft_task = response.draft_task
-        return self.launch_job_from_project(
+        autonomy_mode = self.project_manager._normalize_autonomy_mode(project.autonomy_mode)
+        active_session_id = snapshot.state.active_autonomy_session_id or str(uuid.uuid4())
+        next_count = max(snapshot.state.auto_tasks_run_count, 0) + 1
+        job = self.launch_job_from_project(
             project_id,
             prompt=draft_task.prompt,
             task_type=draft_task.task_type,
@@ -885,9 +889,22 @@ class OrchestratorService:
                     "project_manager_decision": response.decision,
                     "project_manager_reason": response.reason,
                     "project_manager_derived_from_operator_message": draft_task.derived_from_operator_message,
+                    "project_manager_auto_launched": True,
+                    "project_manager_autonomy_mode": autonomy_mode,
+                    "project_manager_autonomy_session_id": active_session_id,
+                    "project_manager_autonomy_trigger": "operator_confirmed",
+                    "project_manager_launch_source": "operator_confirmed",
                 }
             ),
         )
+        self.project_manager.update_workflow_state(
+            project_id,
+            workflow_state="running_current_task",
+            active_job_id=job.id,
+            active_autonomy_session_id=active_session_id,
+            auto_tasks_run_count=next_count,
+        )
+        return job
 
     def run_backend_smoke_test(self, backend_name: str) -> BackendSmokeTestResult:
         if backend_name != "codex_cli":
@@ -1842,6 +1859,14 @@ class OrchestratorService:
                 auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
             )
         if autonomy_mode == "minimal":
+            return self.project_manager.update_workflow_state(
+                project.id,
+                workflow_state="awaiting_confirmation",
+                active_job_id=None,
+                active_autonomy_session_id=None,
+                auto_tasks_run_count=0,
+            )
+        if autonomy_mode == "partial" and trigger == "message":
             return self.project_manager.update_workflow_state(
                 project.id,
                 workflow_state="awaiting_confirmation",

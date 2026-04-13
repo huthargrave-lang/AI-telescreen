@@ -59,25 +59,25 @@
 - The project page is now the main place to review dense manager bullet sections, recent ingested outcomes, and any draft follow-up task.
 - When the manager recommends `launch_followup_job`, the browser can prefill a task draft or launch that draft directly with operator approval.
 - The top of each project page now includes a Project Manager composer so you can type a new direction and get back a fresh structured recommendation without leaving the browser.
-- Composer hints are lightweight and advisory: urgency nudges draft priority, Coding Agent chooses which executor should handle launched work, and execution mode nudges whether the next draft should stay read-only, make safe changes, or do a full coding pass.
+- Composer hints are lightweight and advisory: urgency nudges draft priority, Coding Agent chooses which executor should handle launched work, and Execution Mode defaults to `Auto` so the manager can choose read-only review, safe changes, or a fuller coding pass based on the request.
 - The Project Manager is the planner and memory layer. The Coding Agent selector does not change the manager's own brain.
 - `Auto` means "use the best available coding agent, preferring Codex when available."
 - Each saved project also now has an autonomy mode:
   - `minimal`: asks before every task and never auto-enqueues work
-  - `partial`: runs the current supervised step, reports back, then asks whether it should keep going
+  - `partial`: recommends the next supervised step, waits for approval, then reports back and asks whether it should keep going
   - `full`: keeps iterating until it hits a stop condition such as manual testing, low confidence, ambiguity, repeated failure, or the task limit
-- The top of the project page now includes a compact Project Manager session card.
-- That card shows whether the manager is idle, has a queued task waiting for a worker, is actively running a task, is waiting on the operator, or is paused for manual testing.
+- The top of the project page now uses a live Project Manager → Coding Agent workspace instead of a stale latest-reply card.
+- The left side shows what the Project Manager is doing as planner or reviewer. The right side shows the current Coding Agent handoff, including queued, running, completed, failed, or waiting-to-retry task state.
 - Manager-launched tasks still use the same queue and worker model as every other job. `Waiting on worker` means the manager already queued the task, but no worker has picked it up yet.
 - `Waiting on operator` means the manager finished the current supervised step or needs approval before it continues.
-- In partial autonomy, the normal rhythm is: launch one task, report back, then show `Keep Going` while waiting on the operator.
+- In partial autonomy, the normal rhythm is: recommend one task, wait for approval, report back after it runs, then show `Keep Going` while waiting on the operator.
 - The default manager reply now reads like a concise technical lead instead of a raw schema renderer.
 - The primary project-page actions are human-first: `Run it`, `Edit`, `Ask Follow-up`, `Keep Going`, and `Store as Project Guidance`.
 - Raw decision labels, confidence, full draft prompts, and rationale are still available, but they live behind `Show details` instead of dominating the page.
 - `Store as Project Guidance` records the current guidance in compact manager memory without launching work.
 - Project guidance, operator prompts, manager replies, job outcomes, and operator feedback all feed the same compact project memory. Older details are summarized automatically instead of living in separate context buckets.
 - `Ask Follow-up` keeps the conversation going from the same project page instead of forcing you into a separate job flow.
-- In partial autonomy, the manager can launch the current obvious step, then come back and ask whether it should continue instead of silently looping forever.
+- In partial autonomy, the manager recommends the current obvious step, waits for approval to hand it off, then comes back and asks whether it should continue instead of silently looping forever.
 - In full autonomy, the manager can continue iterating, and it now auto-starts obvious low-risk first steps such as read-only reviews instead of asking first. It still stops for manual testing, low confidence, ambiguity, repeated failure, or session/task-count limits.
 - If you send a follow-up while the manager is already waiting on a worker, waiting on your continue decision, or paused for manual testing, AI Telescreen now says that explicitly instead of leaving the page feeling dead.
 - Recent Project Manager conversation is stored in a bounded durable history so follow-up stays grounded without becoming an unbounded transcript dump.

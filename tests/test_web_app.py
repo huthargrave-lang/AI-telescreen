@@ -681,20 +681,18 @@ def test_project_detail_renders_project_manager_summary(tmp_path):
 
     assert detail.status_code == 200
     assert "Project Manager" in detail.text
-    assert "Latest Reply" in detail.text
-    assert "Current Task Status" in detail.text
+    assert "Live workspace" in detail.text
+    assert "Coding Agent" in detail.text
+    assert "Live handoff" in detail.text
     assert "Manual verification" in detail.text
     assert "manual testing needed" in detail.text
-    assert "Manual Test Checklist" in detail.text
-    assert "Recent Changes" in detail.text
     assert "Show details" in detail.text
-    assert "Project Manager Session" in detail.text
     assert "Details" in detail.text
     assert "History" in detail.text
     assert "Leave feedback" in detail.text
     assert "Advanced" in detail.text
     assert detail.text.count('<details class="panel disclosure"') >= 4
-    assert "No task in progress" in detail.text
+    assert "No new task yet" in detail.text
     assert _short_id(job.id) in detail.text
 
 
@@ -736,6 +734,7 @@ def test_project_detail_project_manager_composer_submits_and_renders_history(tmp
     assert "Ask Project Manager" in detail.text
     assert "Options" in detail.text
     assert submitted.status_code == 200
+    assert "Live workspace" in submitted.text
     assert "Store as Project Guidance" in submitted.text
     assert "History" in submitted.text
     assert "Leave feedback" in submitted.text
@@ -773,6 +772,8 @@ def test_project_manager_composer_uses_coding_agent_language(tmp_path):
     assert "Coding Agent" in detail.text
     assert "Auto (available, prefers Codex)" in detail.text
     assert "Claude (use the best available Claude executor)" in detail.text
+    assert "Backend Preference" not in detail.text
+    assert '<option value="" selected>Auto</option>' in detail.text
 
 
 def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_path):
@@ -788,7 +789,7 @@ def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_pat
             "default_backend": "messages_api",
             "default_provider": "anthropic",
             "default_base_branch": "main",
-            "autonomy_mode": "partial",
+            "autonomy_mode": "full",
             "notes": "queued session coverage",
         },
         follow_redirects=False,
@@ -810,6 +811,7 @@ def test_project_manager_session_shows_waiting_on_worker_for_queued_task(tmp_pat
     assert submitted.status_code == 200
     assert "Task queued, waiting for worker" in submitted.text
     assert "A worker must be active to pick it up." in submitted.text
+    assert "I handed off the current step." in submitted.text
     assert _short_id(auto_job.id) in submitted.text
     assert f'href="/jobs/{auto_job.id}"' in submitted.text
 
@@ -827,7 +829,7 @@ def test_project_manager_session_shows_running_task_state(tmp_path):
             "default_backend": "messages_api",
             "default_provider": "anthropic",
             "default_base_branch": "main",
-            "autonomy_mode": "partial",
+            "autonomy_mode": "full",
             "notes": "running session coverage",
         },
         follow_redirects=False,
@@ -852,6 +854,7 @@ def test_project_manager_session_shows_running_task_state(tmp_path):
     assert detail.status_code == 200
     assert "Task running" in detail.text
     assert "actively processing the manager-launched task" in detail.text
+    assert "I handed off the current step and I’m waiting on the result." in detail.text
     assert _short_id(auto_job.id) in detail.text
 
 
@@ -887,6 +890,7 @@ def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
     )
 
     followup = client.get(f"/projects/{project.id}?manager_followup=1")
+    followup_job_form = client.get(f"/jobs/new?project_id={project.id}&manager_followup=1")
     advisory = client.post(
         f"/projects/{project.id}/manager/save-advisory",
         follow_redirects=True,
@@ -894,6 +898,9 @@ def test_project_manager_followup_and_advisory_flow_in_browser(tmp_path):
 
     assert followup.status_code == 200
     assert "Continue the current AI Telescreen project-manager discussion" in followup.text
+    assert '<option value="" selected>Auto</option>' in followup.text
+    assert followup_job_form.status_code == 200
+    assert '<option value="">Auto</option>' in followup_job_form.text
     assert advisory.status_code == 200
     assert "Stored the latest recommendation as project guidance in the manager" in advisory.text
     assert "guidance saved" in advisory.text
@@ -943,7 +950,7 @@ def test_project_manager_followup_while_waiting_on_worker_explains_why_no_new_ta
 
     assert followup.status_code == 200
     assert "Your follow-up was saved. The Project Manager is still waiting for a worker to pick up the active task." in followup.text
-    assert "Manager status:" in followup.text
+    assert "I handed off the current step." in followup.text
     assert "A worker must be active to pick it up." in followup.text
     assert len(context.repository.list_project_jobs(project_id, limit=10)) == 1
 
@@ -980,6 +987,7 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
         },
         follow_redirects=True,
     )
+    launched = client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=True)
     auto_job = context.repository.list_project_jobs(project.id, limit=10)[0]
     asyncio.run(orchestrator.run_job_now(auto_job.id, worker_id="worker-partial-browser"))
     detail = client.get(f"/projects/{project.id}")
@@ -987,11 +995,14 @@ def test_project_manager_partial_autonomy_browser_flow_shows_continue_prompt(tmp
     continued = client.post(f"/projects/{project.id}/manager/continue", follow_redirects=False)
 
     assert submitted.status_code == 200
-    assert "queued the current task and is waiting for a worker" in submitted.text
+    assert "waiting for your approval before it launches work" in submitted.text
+    assert "Run it" in submitted.text
+    assert launched.status_code == 200
+    assert "The Project Manager handed the latest task to the coding agent." in launched.text
     assert detail.status_code == 200
     assert "Waiting on your decision" in detail.text
     assert "Keep Going" in detail.text
-    assert "I finished the current step. Want me to keep going?" in detail.text
+    assert "Want me to keep going?" in detail.text
     assert job_detail.status_code == 200
     assert "Keep Going" in job_detail.text
     assert f'/projects/{project.id}/manager/continue' in job_detail.text
@@ -1030,6 +1041,7 @@ def test_project_manager_session_shows_manual_test_pause(tmp_path):
         },
         follow_redirects=True,
     )
+    client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=True)
     auto_job = context.repository.list_project_jobs(project.id, limit=10)[0]
     asyncio.run(orchestrator.run_job_now(auto_job.id, worker_id="worker-manual-session"))
     orchestrator.project_manager.update_workflow_state(
@@ -1081,7 +1093,7 @@ def test_project_manager_launch_task_from_interactive_response(tmp_path):
 
     new_job = client.get(f"/jobs/new?project_id={project.id}&manager_draft=1")
     launched = client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=False)
-    launched_job_id = Path(urlparse(launched.headers["location"]).path).name
+    launched_job_id = context.repository.list_project_jobs(project.id, limit=10)[0].id
     launched_job = context.repository.get_job(launched_job_id)
 
     assert new_job.status_code == 200
@@ -1089,8 +1101,10 @@ def test_project_manager_launch_task_from_interactive_response(tmp_path):
     assert "Goal:" in new_job.text
     assert "Output style:" in new_job.text
     assert launched.status_code == 303
+    assert urlparse(launched.headers["location"]).path == f"/projects/{project.id}"
     assert launched_job.metadata["project_id"] == project.id
     assert launched_job.metadata["execution_mode"] == "safe_changes"
+    assert launched_job.metadata["project_manager_auto_launched"] is True
 
 
 def test_project_feedback_submission_renders_recent_feedback_and_updates_recommendation(tmp_path):
@@ -1200,7 +1214,7 @@ def test_project_manager_draft_prefills_new_job_form_and_launches(tmp_path):
 
     new_job = client.get(f"/jobs/new?project_id={project.id}&manager_draft=1")
     launched = client.post(f"/projects/{project.id}/manager/launch-draft", follow_redirects=False)
-    launched_job_id = Path(urlparse(launched.headers["location"]).path).name
+    launched_job_id = context.repository.list_project_jobs(project.id, limit=10)[0].id
     launched_job = context.repository.get_job(launched_job_id)
 
     assert new_job.status_code == 200
@@ -1208,6 +1222,7 @@ def test_project_manager_draft_prefills_new_job_form_and_launches(tmp_path):
     assert "UI smoke test is still failing" in new_job.text
     assert "Output style:" in new_job.text
     assert launched.status_code == 303
+    assert urlparse(launched.headers["location"]).path == f"/projects/{project.id}"
     assert launched_job.prompt != ""
     assert launched_job.metadata["project_id"] == project.id
     assert launched_job.metadata["execution_mode"] == "coding_pass"

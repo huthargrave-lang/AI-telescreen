@@ -1926,6 +1926,8 @@ class ProjectManagerService:
         if workflow_state == "awaiting_confirmation":
             if autonomy_mode == "minimal":
                 return "Minimal autonomy keeps the manager advisory-only and asks before every task."
+            if autonomy_mode == "partial":
+                return "Partial autonomy recommends the next supervised step and waits for your go-ahead before it launches work."
             return "The manager drafted the next step and is waiting for operator confirmation before it launches more work."
         if autonomy_mode == "full" and auto_tasks_run_count:
             return "The manager can keep iterating on its own, but it will still stop for manual testing, ambiguity, repeated failure, or the session task limit."

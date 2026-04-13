@@ -276,13 +276,15 @@ def test_project_manager_partial_autonomy_launches_then_waits_for_continue(tmp_p
         urgency="normal",
         execution_mode="safe_changes",
     )
-    launched_jobs = repository.list_project_jobs(project.id, limit=10)
-    auto_job = launched_jobs[0]
+    assert snapshot.state.workflow_state == "awaiting_confirmation"
+    assert repository.list_project_jobs(project.id, limit=10) == []
+
+    auto_job = orchestrator.launch_job_from_project_manager_draft(project.id)
     processed = asyncio.run(orchestrator.run_job_now(auto_job.id, worker_id="worker-partial-autonomy"))
     refreshed = orchestrator.get_project_manager_snapshot(project.id)
 
-    assert snapshot.state.workflow_state == "running_current_task"
     assert auto_job.metadata["project_manager_auto_launched"] is True
+    assert auto_job.metadata["project_manager_launch_source"] == "operator_confirmed"
     assert processed.status == JobStatus.COMPLETED
     assert refreshed.state.workflow_state == "awaiting_continue_decision"
     assert refreshed.state.latest_response is not None

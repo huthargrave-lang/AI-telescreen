@@ -66,7 +66,7 @@
           <label>
             <span class="meta">Execution mode</span><br />
             <select name="execution_mode">
-              <option value="" {% if not manager_form_values.execution_mode %}selected{% endif %}>auto</option>
+              <option value="" {% if not manager_form_values.execution_mode %}selected{% endif %}>Auto</option>
               {% for mode in ["read_only", "safe_changes", "coding_pass"] %}
                 <option value="{{ mode }}" {% if manager_form_values.execution_mode == mode %}selected{% endif %}>{{ mode }}</option>
               {% endfor %}
@@ -85,19 +85,17 @@
   <section class="panel" style="margin-top: 18px;">
     <div class="split">
       <div>
-        <h2 style="margin-top:0;">Latest Reply</h2>
-        <div class="meta">Short by default. Details stay available when you need them.</div>
+        <h2 style="margin-top:0;">Live workspace</h2>
+        <div class="meta">Project Manager plans and reviews. Coding Agent executes the current handoff.</div>
       </div>
-      {% if project_manager.response %}
-        <div class="pill-row">
-          {% for badge in project_manager.display.status_badges %}
-            <span class="pill small">{{ badge }}</span>
-          {% endfor %}
-          {% if project_manager.display.reacting_to_operator_feedback %}
-            <span class="pill small status-pill status-waiting_retry">reacting to operator feedback</span>
-          {% endif %}
-        </div>
-      {% endif %}
+      <div class="pill-row">
+        {% for badge in project_manager.session.status_badges %}
+          <span class="pill small {{ badge.class_name }}">{{ badge.label }}</span>
+        {% endfor %}
+        {% if project_manager.display.reacting_to_operator_feedback %}
+          <span class="pill small status-pill status-waiting_retry">reacting to operator feedback</span>
+        {% endif %}
+      </div>
     </div>
 
     {% if project_manager.response %}
@@ -105,247 +103,184 @@
         <div>
           <div class="meta">Project Manager</div>
           <div class="value-block">
-            <strong>{{ project_manager.display.reply_lead }}</strong>
-            {% if project_manager.display.reply_why %}
-              <div style="margin-top: 8px;">{{ project_manager.display.reply_why }}</div>
-            {% endif %}
-            {% if project_manager.display.reply_question %}
-              <div class="meta" style="margin-top: 10px;">{{ project_manager.display.reply_question }}</div>
-            {% endif %}
-          </div>
-        </div>
-        <div>
-          <div class="meta">Recommended next step</div>
-          <div class="value-block">
-            <strong>{{ project_manager.display.recommendation_title }}</strong>
-            {% if project_manager.response.draft_task %}
-              <div class="meta" style="margin-top: 10px;">Draft ready to edit or run.</div>
-            {% elif project_manager.response.needs_manual_testing %}
-              <div class="meta" style="margin-top: 10px;">Manual browser verification is the next step.</div>
-            {% else %}
-              <div class="meta" style="margin-top: 10px;">{{ project_manager.state.summary }}</div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-
-      <div class="value-block" style="margin-top: 12px;">
-        <strong>Manager status:</strong> {{ project_manager.session.detail }}
-      </div>
-
-      <div class="toolbar" style="margin-top: 12px;">
-        {% if project_manager.response.decision == "launch_followup_job" and project_manager.response.draft_task and project_manager.state.workflow_state != "running_current_task" %}
-          <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
-            <button type="submit">Run it</button>
-          </form>
-        {% endif %}
-        {% if project_manager.state.workflow_state == "awaiting_continue_decision" and project_manager.response.draft_task %}
-          <form method="post" action="/projects/{{ project.id }}/manager/continue">
-            <button type="submit">Keep Going</button>
-          </form>
-        {% endif %}
-        {% if project_manager.response.draft_task %}
-          <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit</a>
-        {% endif %}
-        <a class="pill" href="/projects/{{ project.id }}?manager_followup=1#project-manager-composer">Ask Follow-up</a>
-        <form method="post" action="/projects/{{ project.id }}/manager/save-advisory">
-          <button type="submit" class="secondary">Store as Project Guidance</button>
-        </form>
-      </div>
-      <div class="meta" style="margin-top: 8px;">Project guidance is saved into the manager's compact project memory for future decisions without launching work.</div>
-
-      <details class="disclosure" style="margin-top: 14px;">
-        <summary class="pill disclosure-toggle" style="display: inline-flex;">Show details</summary>
-        <div class="summary-grid two" style="margin-top: 12px;">
-          {% for section in project_manager.display.primary_sections %}
-            <div>
-              <div class="meta">{{ section["title"] }}</div>
-              <ul class="list-compact">
-                {% for item in section["items"] %}
-                  <li>{{ item }}</li>
-                {% endfor %}
-              </ul>
+            <div class="pill-row">
+              <span class="pill small">planner</span>
+              <span class="pill small">{{ project_manager.session.workflow_label }}</span>
+              <span class="pill small">{{ project_manager.state.current_phase | replace("_", " ") }}</span>
             </div>
-          {% endfor %}
-          {% for section in project_manager.display.secondary_sections %}
-            <div>
-              <div class="meta">{{ section["title"] }}</div>
-              <ul class="list-compact">
-                {% for item in section["items"] %}
-                  <li>{{ item }}</li>
-                {% endfor %}
-              </ul>
-            </div>
-          {% endfor %}
-        </div>
+            <strong>{{ project_manager.workspace.manager.headline }}</strong>
+            <div style="margin-top: 8px;">{{ project_manager.workspace.manager.detail }}</div>
+            <div class="meta" style="margin-top: 10px;">{{ project_manager.workspace.manager.action }}</div>
+            <div class="meta" style="margin-top: 10px;">{{ project_manager.session.detail }}</div>
 
-        <div class="summary-grid two" style="margin-top: 12px;">
-          <div>
-            <div class="meta">Response details</div>
-            <div class="stack-compact">
-              <div class="pill-row">
-                <span class="pill small">{{ project_manager.response.phase }}</span>
-                <span class="pill small">{{ project_manager.response.ui_layout_hint }}</span>
-                <span class="pill small">{{ project_manager.response.decision }}</span>
-                <span class="pill small">{{ project_manager.response.confidence }}</span>
+            <div class="toolbar" style="margin-top: 12px;">
+              {% if project_manager.response.decision == "launch_followup_job" and project_manager.response.draft_task and project_manager.state.workflow_state != "running_current_task" %}
+                <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
+                  <button type="submit">Run it</button>
+                </form>
+              {% endif %}
+              {% if project_manager.state.workflow_state == "awaiting_continue_decision" and project_manager.response.draft_task %}
+                <form method="post" action="/projects/{{ project.id }}/manager/continue">
+                  <button type="submit">Keep Going</button>
+                </form>
+              {% endif %}
+              {% if project_manager.response.draft_task %}
+                <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit</a>
+              {% endif %}
+              <a class="pill" href="/projects/{{ project.id }}?manager_followup=1#project-manager-composer">Ask Follow-up</a>
+              <form method="post" action="/projects/{{ project.id }}/manager/save-advisory">
+                <button type="submit" class="secondary">Store as Project Guidance</button>
+              </form>
+            </div>
+            <div class="meta" style="margin-top: 8px;">Project guidance is saved into the manager's compact project memory for future decisions without launching work.</div>
+
+            <details class="disclosure" style="margin-top: 14px;">
+              <summary class="pill disclosure-toggle" style="display: inline-flex;">Show details</summary>
+              <div class="summary-grid two" style="margin-top: 12px;">
+                {% for section in project_manager.display.primary_sections %}
+                  <div>
+                    <div class="meta">{{ section["title"] }}</div>
+                    <ul class="list-compact">
+                      {% for item in section["items"] %}
+                        <li>{{ item }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endfor %}
+                {% for section in project_manager.display.secondary_sections %}
+                  <div>
+                    <div class="meta">{{ section["title"] }}</div>
+                    <ul class="list-compact">
+                      {% for item in section["items"] %}
+                        <li>{{ item }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endfor %}
               </div>
-              <div class="value-block">{{ project_manager.response.reason }}</div>
-            </div>
-          </div>
-          {% if project_manager.response.draft_task %}
-            <div>
-              <div class="meta">Draft settings</div>
-              <div class="stack-compact">
-                <div class="pill-row">
-                  <span class="pill small">{{ project_manager.response.draft_task.backend }}</span>
-                  <span class="pill small">{{ project_manager.response.draft_task.task_type }}</span>
-                  <span class="pill small">priority {{ project_manager.response.draft_task.priority }}</span>
-                  {% if project_manager.response.draft_task.provider %}
-                    <span class="pill small">{{ project_manager.response.draft_task.provider }}</span>
-                  {% endif %}
-                  {% if project_manager.response.draft_task.execution_mode %}
-                    <span class="pill small">{{ project_manager.response.draft_task.execution_mode }}</span>
-                  {% endif %}
-                  {% if project_manager.response.draft_task.base_branch %}
-                    <span class="pill small">base {{ project_manager.response.draft_task.base_branch }}</span>
-                  {% endif %}
-                  {% if project_manager.response.draft_task.use_git_worktree %}
-                    <span class="pill small">worktree</span>
-                  {% endif %}
+
+              <div class="summary-grid two" style="margin-top: 12px;">
+                <div>
+                  <div class="meta">Manager summary</div>
+                  <div class="stack-compact">
+                    <div class="pill-row">
+                      <span class="pill small">{{ project_manager.response.phase }}</span>
+                      <span class="pill small">{{ project_manager.response.ui_layout_hint }}</span>
+                      <span class="pill small">{{ project_manager.response.decision }}</span>
+                      <span class="pill small">{{ project_manager.response.confidence }}</span>
+                    </div>
+                    <div class="value-block">{{ project_manager.response.reason }}</div>
+                  </div>
                 </div>
-                <div class="meta">Derived from operator message: {{ project_manager.response.draft_task.derived_from_operator_message or "n/a" }}</div>
+                {% if project_manager.response.draft_task %}
+                  <div>
+                    <div class="meta">Draft settings</div>
+                    <div class="stack-compact">
+                      <div class="pill-row">
+                        <span class="pill small">{{ project_manager.response.draft_task.backend }}</span>
+                        <span class="pill small">{{ project_manager.response.draft_task.task_type }}</span>
+                        <span class="pill small">priority {{ project_manager.response.draft_task.priority }}</span>
+                        {% if project_manager.response.draft_task.provider %}
+                          <span class="pill small">{{ project_manager.response.draft_task.provider }}</span>
+                        {% endif %}
+                        {% if project_manager.response.draft_task.execution_mode %}
+                          <span class="pill small">{{ project_manager.response.draft_task.execution_mode }}</span>
+                        {% endif %}
+                        {% if project_manager.response.draft_task.base_branch %}
+                          <span class="pill small">base {{ project_manager.response.draft_task.base_branch }}</span>
+                        {% endif %}
+                        {% if project_manager.response.draft_task.use_git_worktree %}
+                          <span class="pill small">worktree</span>
+                        {% endif %}
+                      </div>
+                      <div class="meta">Derived from operator message: {{ project_manager.response.draft_task.derived_from_operator_message or "n/a" }}</div>
+                    </div>
+                  </div>
+                {% endif %}
               </div>
-            </div>
-          {% endif %}
+
+              {% if project_manager.response.draft_task %}
+                <div style="margin-top: 12px;">
+                  <div class="meta">Draft prompt</div>
+                  <div class="value-block"><code>{{ project_manager.response.draft_task.prompt }}</code></div>
+                </div>
+                {% if project_manager.response.draft_task.rationale_bullets %}
+                  <div style="margin-top: 10px;">
+                    <div class="meta">Draft rationale</div>
+                    <ul class="list-compact">
+                      {% for item in project_manager.response.draft_task.rationale_bullets %}
+                        <li>{{ item }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+              {% endif %}
+            </details>
+          </div>
         </div>
 
-        {% if project_manager.response.draft_task %}
-          <div style="margin-top: 12px;">
-            <div class="meta">Draft prompt</div>
-            <div class="value-block"><code>{{ project_manager.response.draft_task.prompt }}</code></div>
-          </div>
-          {% if project_manager.response.draft_task.rationale_bullets %}
-            <div style="margin-top: 10px;">
-              <div class="meta">Draft rationale</div>
-              <ul class="list-compact">
-                {% for item in project_manager.response.draft_task.rationale_bullets %}
-                  <li>{{ item }}</li>
-                {% endfor %}
-              </ul>
+        <div>
+          <div class="meta">Coding Agent</div>
+          <div class="value-block">
+            <div class="pill-row">
+              <span class="pill small">{{ project_manager.workspace.coding_agent.label }}</span>
+              {% if project_manager.workspace.coding_agent.active_job %}
+                <span class="pill small status-pill status-{{ project_manager.workspace.coding_agent.active_job.status }}">{{ project_manager.workspace.coding_agent.active_job.status }}</span>
+              {% endif %}
             </div>
-          {% endif %}
-        {% endif %}
-      </details>
+            <strong>{{ project_manager.workspace.coding_agent.headline }}</strong>
+            <div style="margin-top: 8px;">{{ project_manager.workspace.coding_agent.detail }}</div>
+
+            {% if project_manager.workspace.coding_agent.active_job %}
+              {% set active_job = project_manager.workspace.coding_agent.active_job %}
+              <div class="summary-grid two" style="margin-top: 12px;">
+                <div>
+                  <div class="meta">Active job</div>
+                  <a href="/jobs/{{ active_job.id }}" title="{{ active_job.id }}">
+                    <span class="mono-inline">{{ active_job.short_id }}</span>
+                  </a>
+                </div>
+                <div>
+                  <div class="meta">Last activity</div>
+                  <div>{{ active_job.last_activity_label or "n/a" }}</div>
+                </div>
+                <div>
+                  <div class="meta">Current phase</div>
+                  <div>{{ active_job.latest_phase or "waiting" }}</div>
+                </div>
+                <div>
+                  <div class="meta">Result</div>
+                  <div>{{ active_job.lifecycle.headline }}</div>
+                </div>
+              </div>
+              {% if project_manager.workspace.coding_agent.preview %}
+                <div class="meta" style="margin-top: 10px;">{{ project_manager.workspace.coding_agent.preview }}</div>
+              {% endif %}
+            {% elif project_manager.workspace.coding_agent.preview %}
+              <div class="meta" style="margin-top: 10px;">{{ project_manager.workspace.coding_agent.preview }}</div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      {% if project_manager.workspace.timeline %}
+        <div style="margin-top: 14px;">
+          <div class="meta">Live handoff</div>
+          <div class="activity-list">
+            {% for item in project_manager.workspace.timeline %}
+              <div class="activity-row">
+                <div class="stack-compact tight">
+                  <div><strong>{{ item.label }}</strong></div>
+                  <div class="meta">{{ item.text }}</div>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
     {% else %}
       <p class="meta" style="margin-top: 12px;">No project-manager reply yet. Start with a message above.</p>
     {% endif %}
-  </section>
-
-  <section class="panel" style="margin-top: 18px;">
-    <div class="split">
-      <div>
-        <h2 style="margin-top:0;">Current Task Status</h2>
-        <div class="meta">See whether the manager is idle, queued, running, or waiting on you.</div>
-      </div>
-      <div class="pill-row">
-        <span class="pill small">{{ project_manager.session.autonomy_mode_label }}</span>
-        <span class="pill small">{{ project_manager.session.workflow_label }}</span>
-      </div>
-    </div>
-    <div class="summary-grid two" style="margin-top: 12px;">
-      <div>
-        <div class="meta">Project Manager Session</div>
-        <div class="value-block">
-          <div class="stack-compact">
-            <div class="pill-row">
-              {% for badge in project_manager.session.status_badges %}
-                <span class="pill small {{ badge.class_name }}">{{ badge.label }}</span>
-              {% endfor %}
-              {% if project_manager.session.active_job_status %}
-                <span class="pill small status-pill status-{{ project_manager.session.active_job_status }}">{{ project_manager.session.active_job_status }}</span>
-              {% endif %}
-            </div>
-            <div><strong>{{ project_manager.session.headline }}</strong></div>
-            <div>{{ project_manager.session.detail }}</div>
-            <div class="summary-grid two" style="margin-top: 4px;">
-              <div>
-                <div class="meta">Active task</div>
-                {% if project_manager.session.active_job_id %}
-                  <div class="stack-compact tight">
-                    <div>
-                      <a href="/jobs/{{ project_manager.session.active_job_id }}" title="{{ project_manager.session.active_job_id }}">
-                        <span class="mono-inline">{{ project_manager.session.active_job_short_id }}</span>
-                      </a>
-                    </div>
-                    {% if project_manager.session.active_job_headline %}
-                      <div class="meta">{{ project_manager.session.active_job_headline }}</div>
-                    {% endif %}
-                  </div>
-                {% else %}
-                  <div>No task in progress</div>
-                {% endif %}
-              </div>
-              <div>
-                <div class="meta">Last activity</div>
-                <div>{{ project_manager.session.last_activity_label or "n/a" }}</div>
-              </div>
-              <div>
-                <div class="meta">Auto tasks this session</div>
-                <div>{{ project_manager.session.auto_task_count }}</div>
-              </div>
-              <div>
-                <div class="meta">Last managed task</div>
-                {% if project_manager.session.last_completed_job_id %}
-                  <div>
-                    <a href="/jobs/{{ project_manager.session.last_completed_job_id }}" title="{{ project_manager.session.last_completed_job_id }}">
-                      <span class="mono-inline">{{ project_manager.session.last_completed_job_short_id }}</span>
-                    </a>
-                  </div>
-                {% else %}
-                  <div>n/a</div>
-                {% endif %}
-              </div>
-            </div>
-            {% if project_manager.session.next_prompt %}
-              <div class="meta">Next prompt: “{{ project_manager.session.next_prompt }}”</div>
-            {% endif %}
-          </div>
-        </div>
-      </div>
-      <div>
-        <div class="meta">Recent activity</div>
-        <div class="value-block">
-          {% if jobs %}
-            <div class="activity-list">
-              {% for job in jobs[:3] %}
-                <div class="activity-row">
-                  <div class="stack-compact tight">
-                    <div class="pill-row">
-                      <span class="pill small status-pill status-{{ job.status }}">{{ job.status }}</span>
-                      <span class="pill small">{{ job.backend }}</span>
-                    </div>
-                    <div>
-                      <a href="/jobs/{{ job.id }}" title="{{ job.id }}">
-                        <span class="mono-inline">{{ job.short_id }}</span>
-                      </a>
-                    </div>
-                    <div class="meta truncate-2" title="{{ job.lifecycle.headline }}">{{ job.lifecycle.headline }}</div>
-                  </div>
-                  <div class="stack-compact tight" style="max-width: 18rem;">
-                    <div class="meta">{{ job.latest_phase or "waiting" }}</div>
-                    <div class="meta truncate-2" title="{{ job.latest_progress_message or job.last_activity_at }}">
-                      {{ job.latest_progress_preview or job.last_activity_at or "No recent activity." }}
-                    </div>
-                  </div>
-                </div>
-              {% endfor %}
-            </div>
-          {% else %}
-            <div class="meta">No recent task activity yet.</div>
-          {% endif %}
-        </div>
-      </div>
-    </div>
   </section>
 
   <details class="panel disclosure" style="margin-top: 18px;" id="details-panel">

@@ -369,6 +369,182 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "status_badges": badges[:4],
         }
 
+    def _managed_focus_job(session: dict, jobs: list[dict]) -> Optional[dict]:
+        jobs_by_id = {job["id"]: job for job in jobs}
+        focus_job_id = session.get("active_job_id")
+        if not focus_job_id and session.get("workflow_state") in {"awaiting_continue_decision", "blocked_on_manual_test"}:
+            focus_job_id = session.get("last_failed_job_id") or session.get("last_completed_job_id")
+        if not focus_job_id:
+            focus_job_id = session.get("last_failed_job_id") or session.get("last_completed_job_id")
+        return jobs_by_id.get(focus_job_id) if focus_job_id else None
+
+    def _project_manager_live_surface(project_manager: dict, jobs: list[dict]) -> dict:
+        session = project_manager["session"]
+        response = project_manager.get("response") or {}
+        display = project_manager.get("display") or {}
+        focus_job = _managed_focus_job(session, jobs)
+        latest_operator_message = next(
+            (message for message in project_manager.get("recent_messages", []) if message.get("role") == "operator"),
+            None,
+        )
+        selected_backend = (
+            (focus_job or {}).get("backend")
+            or ((response.get("draft_task") or {}).get("backend"))
+            or (latest_operator_message or {}).get("backend_preference")
+            or "auto"
+        )
+        coding_agent_label = _coding_agent_label(selected_backend)
+        workflow_state = session.get("workflow_state")
+
+        if workflow_state == "running_current_task":
+            if session.get("waiting_on_worker"):
+                manager_headline = "I handed off the current step."
+                manager_detail = "The task is queued and waiting for a worker right now."
+                manager_action = "Run queued jobs once or keep a worker active to move it forward."
+            elif session.get("active_job_status") == JobStatus.RUNNING.value:
+                manager_headline = "I handed off the current step and I’m waiting on the result."
+                manager_detail = (
+                    (focus_job or {}).get("latest_progress_preview")
+                    or "The coding agent is working now. I’ll review the result as soon as it finishes."
+                )
+                manager_action = "I’ll report back after the current job completes."
+            elif session.get("active_job_status") == JobStatus.WAITING_RETRY.value:
+                manager_headline = "I’m still waiting on the current task."
+                manager_detail = "The coding agent hit a retryable problem and is waiting for the next attempt."
+                manager_action = "I’ll reassess as soon as that retry runs."
+            else:
+                manager_headline = display.get("reply_lead") or session.get("headline")
+                manager_detail = session.get("detail")
+                manager_action = "I’ll update the plan when the current task changes state."
+        elif workflow_state == "awaiting_continue_decision":
+            manager_headline = "I reviewed the finished task and found the next likely step."
+            manager_detail = response.get("reason") or display.get("reply_why") or session.get("detail")
+            manager_action = "Want me to keep going?"
+        elif workflow_state == "blocked_on_manual_test":
+            manager_headline = "I’m paused until manual testing is complete."
+            manager_detail = response.get("reason") or session.get("detail")
+            manager_action = "Leave feedback when the check is done and I’ll use it in the next decision."
+        elif workflow_state == "awaiting_confirmation":
+            manager_headline = display.get("reply_lead") or "I have the next step ready."
+            if session.get("autonomy_mode") == "minimal":
+                manager_detail = "Minimal autonomy asks before every task."
+            elif session.get("autonomy_mode") == "partial":
+                manager_detail = "Partial autonomy recommends the next step and waits for your go-ahead before it launches work."
+            else:
+                manager_detail = session.get("detail")
+            manager_action = display.get("reply_question") or "Run it when you want me to hand it to the coding agent."
+        else:
+            manager_headline = display.get("reply_lead") or session.get("headline")
+            manager_detail = display.get("reply_why") or session.get("detail")
+            manager_action = display.get("reply_question") or "Ask follow-up when you want the next step."
+
+        if focus_job:
+            status = focus_job.get("status")
+            if status == JobStatus.QUEUED.value:
+                agent_headline = "Task queued"
+                agent_detail = "Waiting for a worker to pick it up."
+            elif status == JobStatus.RUNNING.value:
+                agent_headline = "Task running"
+                agent_detail = focus_job.get("latest_progress_preview") or "The coding agent is actively working."
+            elif status == JobStatus.COMPLETED.value:
+                agent_headline = "Task completed"
+                agent_detail = focus_job.get("latest_progress_preview") or "The coding agent finished the current step."
+            elif status == JobStatus.FAILED.value:
+                agent_headline = "Task failed"
+                agent_detail = focus_job.get("last_error_preview") or "The coding agent hit a blocking failure."
+            elif status == JobStatus.WAITING_RETRY.value:
+                agent_headline = "Task waiting to retry"
+                agent_detail = focus_job.get("lifecycle", {}).get("headline") or "The coding agent is waiting for the next retry."
+            else:
+                agent_headline = focus_job.get("lifecycle", {}).get("headline") or "Task state updated"
+                agent_detail = focus_job.get("latest_progress_preview") or session.get("detail")
+        elif response.get("draft_task"):
+            agent_headline = "Ready for handoff"
+            agent_detail = "The manager has a scoped task draft ready, but nothing has been launched yet."
+        elif workflow_state == "blocked_on_manual_test":
+            agent_headline = "No new task yet"
+            agent_detail = "The next task is paused until manual testing is complete."
+        else:
+            agent_headline = "No active task"
+            agent_detail = "The coding agent is idle until the manager launches work."
+
+        agent_preview = None
+        if focus_job:
+            agent_preview = (
+                focus_job.get("latest_progress_preview")
+                or focus_job.get("last_error_preview")
+                or focus_job.get("lifecycle", {}).get("helper_text")
+            )
+        elif response.get("draft_task"):
+            agent_preview = _truncate_text(response["draft_task"].get("prompt"), limit=160)
+
+        timeline = []
+        if response:
+            timeline.append(
+                {
+                    "label": "Manager decided next step",
+                    "text": display.get("recommendation_title") or response.get("decision") or session.get("headline"),
+                }
+            )
+        if focus_job:
+            timeline.append(
+                {
+                    "label": f"Task sent to {coding_agent_label}",
+                    "text": f"{focus_job.get('short_id')} · {focus_job.get('backend')}",
+                }
+            )
+            timeline.append(
+                {
+                    "label": agent_headline,
+                    "text": agent_detail,
+                }
+            )
+        elif response.get("draft_task"):
+            timeline.append(
+                {
+                    "label": f"{coding_agent_label} waiting for handoff",
+                    "text": "Run it when you want the manager to hand off the drafted task.",
+                }
+            )
+        if workflow_state == "awaiting_continue_decision":
+            timeline.append(
+                {
+                    "label": "Manager asking whether to continue",
+                    "text": "The current supervised step is done and the next step is ready if you want it.",
+                }
+            )
+        elif workflow_state == "blocked_on_manual_test":
+            timeline.append(
+                {
+                    "label": "Manager blocked on manual testing",
+                    "text": "Leave operator feedback after the check so the manager can plan the next move.",
+                }
+            )
+        elif workflow_state == "running_current_task" and session.get("waiting_on_worker"):
+            timeline.append(
+                {
+                    "label": "Waiting for worker pickup",
+                    "text": "The queue has the task, but a worker still needs to claim it.",
+                }
+            )
+
+        return {
+            "manager": {
+                "headline": manager_headline,
+                "detail": manager_detail,
+                "action": manager_action,
+            },
+            "coding_agent": {
+                "label": coding_agent_label,
+                "backend": selected_backend,
+                "headline": agent_headline,
+                "detail": agent_detail,
+                "preview": agent_preview,
+                "active_job": focus_job,
+            },
+            "timeline": timeline[:4],
+        }
+
     def _job_detail_context(request: Request, job_id: str) -> dict:
         details = orchestrator.inspect(job_id)
         lifecycle = orchestrator.describe_job_lifecycle(details.job)
@@ -543,11 +719,10 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     f"Continue the current AI Telescreen project-manager discussion for {project.name} "
                     f"and refine the latest recommendation: {response.get('reason') or 'What should happen next?'}"
                 )
-            values["execution_mode"] = "read_only"
         draft_task = response.get("draft_task") or {}
         if draft_task.get("backend"):
             values["coding_agent"] = _coding_agent_form_value(draft_task["backend"])
-        if draft_task.get("execution_mode"):
+        if draft_task.get("execution_mode") and not followup:
             values["execution_mode"] = draft_task["execution_mode"]
         if form_values:
             values.update(form_values)
@@ -616,7 +791,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             values.update(
                 {
                     "prompt": _project_manager_followup_prompt(project, response_payload),
-                    "execution_mode": "read_only",
+                    "execution_mode": "",
                     "_manager_context": {
                         "mode": "followup",
                         "decision": response.decision,
@@ -667,6 +842,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         project_manager["session"] = serialize_project_manager_session(
             orchestrator.describe_project_manager_session(project_id)
         )
+        project_manager["workspace"] = _project_manager_live_surface(project_manager, jobs)
         return {
             "request": request,
             "project": project,
@@ -734,6 +910,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         workspace = _workspace_summary(job)
         error_preview = _truncate_text(job.last_error_message, limit=72)
         latest_progress_preview = _truncate_text(latest_progress, limit=72)
+        activity_source = latest_stream_event.timestamp if latest_stream_event else job.updated_at
         return {
             "id": job.id,
             "short_id": _short_id(job.id),
@@ -760,7 +937,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "latest_phase": latest_phase,
             "latest_progress_message": latest_progress,
             "latest_progress_preview": latest_progress_preview,
-            "last_activity_at": latest_stream_event.timestamp.isoformat() if latest_stream_event else job.updated_at.isoformat(),
+            "last_activity_at": activity_source.isoformat(),
+            "last_activity_label": _format_timestamp(activity_source),
             "integration": {
                 "status": integration_snapshot.get("status", "not_scanned"),
                 "labels": integration_snapshot.get("labels", ["not scanned"]),
@@ -1345,8 +1523,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             return _redirect_with_feedback(request, f"/projects/{project_id}", error=str(exc))
         return _redirect_with_feedback(
             request,
-            f"/jobs/{job.id}",
-            notice="Created a job from the latest Project Manager draft.",
+            f"/projects/{project_id}",
+            notice="The Project Manager handed the latest task to the coding agent.",
         )
 
     @app.post("/worker/run-once")
