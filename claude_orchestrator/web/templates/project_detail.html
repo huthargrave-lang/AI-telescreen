@@ -1,42 +1,29 @@
 {% extends "base.html" %}
-{% block title %}Project {{ project.name }} · AI Telescreen{% endblock %}
+{% block title %}{{ project.name }} · AI Telescreen{% endblock %}
 {% block body %}
   <div class="header">
     <div>
-      <a href="/projects">← Back to Projects</a>
+      <a href="/projects">← Projects</a>
       <h1 class="title" style="font-size: clamp(1.9rem, 3vw, 2.8rem);">{{ project.name }}</h1>
     </div>
     <div class="toolbar">
-      <a class="pill" href="/jobs/new?project_id={{ project.id }}">Create Job</a>
+      <a class="pill" href="/jobs/new?project_id={{ project.id }}">New Job</a>
     </div>
   </div>
 
+  {# ── Chat composer ── #}
   <section class="panel" id="project-manager-composer">
-    <div class="split">
-      <div>
-        <h2 style="margin-top:0;">Talk to Project Manager</h2>
-        <div class="meta">Planner: Project Manager. Chat updates the plan and Project Context; coding work starts only when you run it or autonomy allows it.</div>
-      </div>
-      <div class="pill-row">
-        <span class="pill small">planner</span>
-        <span class="pill small">{{ project_manager.display.workflow_label | replace("_", " ") }}</span>
-        <span class="pill small">{{ project_manager.state.current_phase | replace("_", " ") }}</span>
-        {% if project_manager.state.needs_manual_testing %}
-          <span class="pill small status-pill status-waiting_retry">manual testing needed</span>
-        {% endif %}
-      </div>
-    </div>
     {% if manager_error %}
-      <p style="color: var(--danger); margin-top: 12px;">{{ manager_error }}</p>
+      <p style="color: var(--danger); margin-bottom: 8px;">{{ manager_error }}</p>
     {% endif %}
-    <form method="post" action="/projects/{{ project.id }}/manager/messages" class="stack-compact" style="margin-top: 12px;">
-      <label>
-        <span class="meta">Tell the project manager what you want to do next</span><br />
-        <textarea name="message" required style="min-height: 120px;">{{ manager_form_values.message }}</textarea>
-      </label>
-      <details class="disclosure">
-        <summary class="pill disclosure-toggle" style="display: inline-flex;">Options</summary>
-        <div class="form-grid" style="margin-top: 12px;">
+    <form method="post" action="/projects/{{ project.id }}/manager/messages">
+      <div class="composer-row">
+        <textarea name="message" required placeholder="Tell the manager what to do next...">{{ manager_form_values.message }}</textarea>
+        <button type="submit">Send</button>
+      </div>
+      <details class="disclosure" style="margin-top: 8px;">
+        <summary class="pill small disclosure-toggle" style="display: inline-flex;">Options</summary>
+        <div class="form-grid" style="margin-top: 8px;">
           <label>
             <span class="meta">Urgency</span><br />
             <select name="urgency">
@@ -46,7 +33,7 @@
             </select>
           </label>
           <label>
-            <span class="meta">Coding Agent</span><br />
+            <span class="meta">Agent</span><br />
             <select name="coding_agent">
               {% for option in coding_agent_options %}
                 <option value="{{ option.value }}" {% if manager_form_values.coding_agent == option.value %}selected{% endif %}>{{ option.label }}{% if option.hint %} ({{ option.hint }}){% endif %}</option>
@@ -54,7 +41,7 @@
             </select>
           </label>
           <label>
-            <span class="meta">Execution mode</span><br />
+            <span class="meta">Mode</span><br />
             <select name="execution_mode">
               <option value="" {% if not manager_form_values.execution_mode %}selected{% endif %}>Auto</option>
               {% for mode in ["read_only", "safe_changes", "coding_pass"] %}
@@ -63,170 +50,198 @@
             </select>
           </label>
         </div>
-        <div class="meta" style="margin-top: 10px;">Coding Agent chooses the executor for launched work. The Project Manager stays the planner and memory layer.</div>
       </details>
-      <div class="toolbar">
-        <button type="submit">Ask Project Manager</button>
-        <a class="pill" href="/jobs/new?project_id={{ project.id }}">Open Full Job Form</a>
-      </div>
     </form>
   </section>
 
+  {# ── Live workspace ── #}
   {% include "partials/project_workspace_live.html" %}
 
-  <details class="panel disclosure" style="margin-top: 18px;" id="details-panel">
+  {# ── Feedback panel (shown when action needed or manually opened) ── #}
+  <details class="panel disclosure" style="margin-top: 14px;" id="feedback-panel"
+    {% if feedback_error or project_manager.session.workflow_state == "blocked_on_manual_test" %}open{% endif %}>
     <summary class="section-summary disclosure-toggle">
-      <strong>Details</strong>
-      <span class="meta">repo, defaults, context, autonomy</span>
+      <strong>Feedback</strong>
+      <span class="meta">{{ project_manager.recent_feedback | length }} entries</span>
     </summary>
-    <div class="summary-grid two" style="margin-top: 14px;">
+    {% if feedback_error %}
+      <p style="color: var(--danger); margin-top: 8px;">{{ feedback_error }}</p>
+    {% endif %}
+    <form method="post" action="/projects/{{ project.id }}/feedback" class="form-grid" style="margin-top: 12px;">
+      <label>
+        <span class="meta">Outcome</span><br />
+        <select name="outcome">
+          {% for option in ["passed", "failed", "mixed", "blocked"] %}
+            <option value="{{ option }}" {% if feedback_form_values.outcome == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Severity</span><br />
+        <select name="severity">
+          {% for option in ["low", "normal", "high", "critical"] %}
+            <option value="{{ option }}" {% if feedback_form_values.severity == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span class="meta">Area</span><br />
+        <select name="area">
+          <option value="" {% if not feedback_form_values.area %}selected{% endif %}>unspecified</option>
+          {% for option in ["layout", "actions", "settings", "diagnostics", "integrations", "project-manager", "other"] %}
+            <option value="{{ option }}" {% if feedback_form_values.area == option %}selected{% endif %}>{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="full">
+        <span class="meta">Notes</span><br />
+        <textarea name="notes" required style="min-height: 80px;">{{ feedback_form_values.notes }}</textarea>
+      </label>
+      <label class="full">
+        <span class="meta">Screenshot ref</span><br />
+        <input type="text" name="screenshot_reference" value="{{ feedback_form_values.screenshot_reference }}" placeholder="/path/to/screenshot.png" />
+      </label>
+      <label class="full">
+        <input type="checkbox" name="requires_followup" {% if feedback_form_values.requires_followup %}checked{% endif %} />
+        <span class="meta">Needs follow-up</span>
+      </label>
+      <div class="full toolbar">
+        <button type="submit">Record</button>
+      </div>
+    </form>
+    {% if project_manager.recent_feedback %}
+      <div class="conversation-list" style="margin-top: 12px;">
+        {% for feedback in project_manager.recent_feedback %}
+          <div class="conversation-item">
+            <div class="conversation-header">
+              <div class="pill-row">
+                <span class="pill small status-pill status-{{ 'completed' if feedback.outcome == 'passed' else ('failed' if feedback.outcome == 'failed' else 'waiting_retry') }}">{{ feedback.outcome }}</span>
+                {% if feedback.severity %}
+                  <span class="pill small">{{ feedback.severity }}</span>
+                {% endif %}
+                {% if feedback.requires_followup %}
+                  <span class="pill small status-pill status-waiting_retry">follow-up</span>
+                {% endif %}
+              </div>
+              <div class="meta">{{ feedback.created_at or "" }}</div>
+            </div>
+            <div>{{ feedback.notes_preview }}</div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </details>
+
+  {# ── Settings & Context ── #}
+  <details class="panel disclosure" style="margin-top: 14px;" id="details-panel">
+    <summary class="section-summary disclosure-toggle">
+      <strong>Settings</strong>
+      <span class="meta">autonomy, context, defaults</span>
+    </summary>
+    <div class="summary-grid two" style="margin-top: 12px;">
       <div>
-        <div class="meta">Repo path</div>
+        <div class="meta">Repo</div>
         <div class="value-block path" title="{{ project.repo_path }}">{{ project.repo_path }}</div>
       </div>
       <div>
-        <div class="meta">Compact defaults</div>
+        <div class="meta">Autonomy</div>
+        <div class="value-block">
+          <form method="post" action="/projects/{{ project.id }}/autonomy" class="stack-compact">
+            <select name="autonomy_mode">
+              {% for option in ["minimal", "partial", "full"] %}
+                <option value="{{ option }}" {% if project_display.autonomy_mode == option %}selected{% endif %}>{{ option | title }}</option>
+              {% endfor %}
+            </select>
+            <div class="meta">
+              {% if project_display.autonomy_mode == "minimal" %}
+                Asks before every task.
+              {% elif project_display.autonomy_mode == "partial" %}
+                Runs one step, then asks.
+              {% else %}
+                Continues until a stop condition.
+              {% endif %}
+            </div>
+            <button type="submit" class="secondary">Update</button>
+          </form>
+        </div>
+      </div>
+      <div>
+        <div class="meta">Defaults</div>
         <div class="value-block">
           <div class="pill-row">
             {% for badge in project_display.defaults.badges %}
               <span class="pill small" title="{{ badge.title }}">{{ badge.label }}</span>
             {% endfor %}
             {% if not project_display.defaults.badges %}
-              <span class="pill small">Uses app defaults</span>
+              <span class="pill small">App defaults</span>
             {% endif %}
           </div>
         </div>
       </div>
       <div>
-        <div class="meta">Autonomy and supervision</div>
+        <div class="meta">Context</div>
         <div class="value-block">
-          <form method="post" action="/projects/{{ project.id }}/autonomy" class="stack-compact">
-            <label>
-              <span class="meta">Project Manager autonomy</span><br />
-              <select name="autonomy_mode">
-                {% for option in ["minimal", "partial", "full"] %}
-                  <option value="{{ option }}" {% if project_display.autonomy_mode == option %}selected{% endif %}>{{ option | title }}</option>
-                {% endfor %}
-              </select>
-            </label>
-            <div class="meta">
-              {% if project_display.autonomy_mode == "minimal" %}
-                Minimal asks before every task.
-              {% elif project_display.autonomy_mode == "partial" %}
-                Partial runs the current step, then asks whether to keep going.
-              {% else %}
-                Full continues until it hits a stop condition.
-              {% endif %}
-            </div>
-            <div class="meta">{{ project_manager.display.workflow_helper_text }}</div>
-            <div class="toolbar">
-              <button type="submit" class="secondary">Update autonomy</button>
-            </div>
-          </form>
-        </div>
-      </div>
-      <div>
-        <div class="meta">Project Context</div>
-        <div class="value-block">
-          <div>{{ project_manager.display.memory_summary }}</div>
-          <div class="meta" style="margin-top: 10px;">Project Context is manager-owned. Chat turns, job outcomes, operator feedback, and saved guidance all roll into this compact memory.</div>
           {% if project_manager.display.project_context %}
-            <div class="summary-grid two" style="margin-top: 12px;">
-              <div>
-                <div class="meta">Purpose</div>
-                <div>{{ project_manager.display.project_context.purpose }}</div>
-              </div>
-              {% if project_manager.display.project_context.current_goals %}
-                <div>
-                  <div class="meta">Current goals</div>
-                  <ul class="list-compact">
-                    {% for item in project_manager.display.project_context.current_goals %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-              {% if project_manager.display.project_context.active_focus %}
-                <div>
-                  <div class="meta">Active focus</div>
-                  <ul class="list-compact">
-                    {% for item in project_manager.display.project_context.active_focus %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-              {% if project_manager.display.project_context.architecture_constraints %}
-                <div>
-                  <div class="meta">Architecture constraints</div>
-                  <ul class="list-compact">
-                    {% for item in project_manager.display.project_context.architecture_constraints %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-              {% if project_manager.display.project_context.lessons_learned %}
-                <div>
-                  <div class="meta">Lessons learned</div>
-                  <ul class="list-compact">
-                    {% for item in project_manager.display.project_context.lessons_learned %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-              {% if project_manager.display.project_context.active_blockers %}
-                <div>
-                  <div class="meta">Active blockers</div>
-                  <ul class="list-compact">
-                    {% for item in project_manager.display.project_context.active_blockers %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-              {% if project_manager.display.project_context.operator_guidance %}
-                <div>
-                  <div class="meta">Saved operator guidance</div>
-                  <ul class="list-compact">
-                    {% for item in project_manager.display.project_context.operator_guidance %}
-                      <li>{{ item }}</li>
-                    {% endfor %}
-                  </ul>
-                </div>
-              {% endif %}
-            </div>
-          {% elif project_manager.display.project_guidance %}
-            <div style="margin-top: 12px;">
-              <div class="meta">Saved operator guidance</div>
+            {% if project_manager.display.project_context.purpose %}
+              <div><strong>{{ project_manager.display.project_context.purpose }}</strong></div>
+            {% endif %}
+            {% if project_manager.display.project_context.current_goals %}
+              <div class="meta" style="margin-top: 6px;">Goals</div>
               <ul class="list-compact">
-                {% for item in project_manager.display.project_guidance %}
+                {% for item in project_manager.display.project_context.current_goals %}
                   <li>{{ item }}</li>
                 {% endfor %}
               </ul>
-            </div>
-          {% endif %}
-          {% if project_manager.display.last_guidance_saved_at %}
-            <div class="meta" style="margin-top: 10px;">Last Project Context guidance saved {{ project_manager.display.last_guidance_saved_at }}</div>
+            {% endif %}
+            {% if project_manager.display.project_context.lessons_learned %}
+              <div class="meta" style="margin-top: 6px;">Lessons</div>
+              <ul class="list-compact">
+                {% for item in project_manager.display.project_context.lessons_learned %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          {% else %}
+            <div class="meta">Context builds automatically as tasks complete.</div>
           {% endif %}
         </div>
       </div>
     </div>
-    <div style="margin-top: 12px;">
-      <div class="meta">Notes</div>
-      <div class="value-block">{{ project.notes or "No operator notes saved for this project." }}</div>
+    <div class="toolbar" style="margin-top: 12px;">
+      <a class="pill" href="/projects/{{ project.id }}/edit">Edit Project</a>
+      <a class="pill" href="/doctor">Doctor</a>
     </div>
   </details>
 
-  <details class="panel disclosure" style="margin-top: 18px;" id="history-panel">
+  {# ── History ── #}
+  <details class="panel disclosure" style="margin-top: 14px;" id="history-panel">
     <summary class="section-summary disclosure-toggle">
       <strong>History</strong>
-      <span class="meta">{{ jobs | length }} launches · {{ project_manager.recent_messages | length }} messages</span>
+      <span class="meta">{{ jobs | length }} jobs · {{ project_manager.recent_messages | length }} messages</span>
     </summary>
-    <div style="margin-top: 14px;">
-      <h2 style="margin-top:0;">Recent Launches</h2>
-      {% if jobs %}
+
+    {# Conversation history as chat thread #}
+    {% if project_manager.recent_messages %}
+      <div class="chat-thread" style="margin-top: 12px;">
+        {% for message in project_manager.recent_messages %}
+          <div class="chat-bubble {{ 'user' if message.role == 'operator' else 'agent' }}">
+            <div class="chat-role">{{ 'You' if message.role == 'operator' else 'Manager' }}</div>
+            <div>{{ message.content_preview }}</div>
+            <div class="meta" style="margin-top: 2px;">
+              {% if message.decision_label %}
+                <span class="pill small" style="font-size: 0.76rem;">{{ message.decision_label }}</span>
+              {% endif %}
+              {{ message.created_at or "" }}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {# Recent launches table #}
+    {% if jobs %}
+      <div style="margin-top: 14px;">
+        <div class="meta" style="margin-bottom: 6px;">Recent Jobs</div>
         <div class="table-wrap">
           <table class="data-table">
             <thead>
@@ -234,10 +249,7 @@
                 <th>Job</th>
                 <th>Status</th>
                 <th>Backend</th>
-                <th>Provider</th>
-                <th>Attempts</th>
                 <th>Activity</th>
-                <th>Error</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -251,55 +263,24 @@
                     </div>
                   </td>
                   <td><span class="pill small status-pill status-{{ job.status }}">{{ job.status }}</span></td>
-                  <td><span class="pill small" title="{{ job.backend }}">{{ job.backend }}</span></td>
-                  <td><span class="pill small" title="{{ job.provider }}">{{ job.provider }}</span></td>
-                  <td>{{ job.attempt_count }}/{{ job.max_attempts }}</td>
+                  <td><span class="pill small">{{ job.backend }}</span></td>
                   <td>
                     <div class="stack-compact tight">
                       <div>{{ job.latest_phase or "waiting" }}</div>
-                      <div class="meta truncate-2" title="{{ job.latest_progress_message or job.last_activity_at }}">
-                        {{ job.latest_progress_preview or job.last_activity_at }}
-                      </div>
+                      <div class="meta truncate-2">{{ job.latest_progress_preview or job.last_activity_at }}</div>
                     </div>
-                  </td>
-                  <td>
-                    {% if job.last_error_message %}
-                      <div class="truncate-2" title="{{ job.last_error_message }}">{{ job.last_error_preview }}</div>
-                    {% else %}
-                      <div class="meta">No recent error</div>
-                    {% endif %}
                   </td>
                   <td class="cell-actions">
                     <div class="toolbar compact">
                       <a class="pill" href="/jobs/{{ job.id }}">Open</a>
-                      {% if job.actions.run_now %}
-                        <form method="post" action="/jobs/{{ job.id }}/run-now?next=/projects/{{ project.id }}">
-                          <button type="submit">Run Now</button>
-                        </form>
-                      {% endif %}
-                      {% if job.actions.retry_now %}
-                        <form method="post" action="/jobs/{{ job.id }}/retry-now?next=/projects/{{ project.id }}">
-                          <button type="submit">Retry Now</button>
-                        </form>
-                      {% endif %}
                       {% if job.actions.retry %}
                         <form method="post" action="/jobs/{{ job.id }}/retry?next=/projects/{{ project.id }}">
-                          <button type="submit">Retry</button>
+                          <button type="submit" class="secondary">Retry</button>
                         </form>
                       {% endif %}
                       {% if job.actions.cancel %}
                         <form method="post" action="/jobs/{{ job.id }}/cancel?next=/projects/{{ project.id }}">
-                          <button type="submit" class="secondary">Cancel</button>
-                        </form>
-                      {% endif %}
-                      {% if job.actions.duplicate %}
-                        <form method="post" action="/jobs/{{ job.id }}/duplicate?next=/projects/{{ project.id }}">
-                          <button type="submit" class="ghost">Duplicate</button>
-                        </form>
-                      {% endif %}
-                      {% if job.actions.delete %}
-                        <form method="post" action="/jobs/{{ job.id }}/delete?next=/projects/{{ project.id }}">
-                          <button type="submit" class="danger">Delete</button>
+                          <button type="submit" class="ghost">Cancel</button>
                         </form>
                       {% endif %}
                     </div>
@@ -309,327 +290,58 @@
             </tbody>
           </table>
         </div>
-      {% else %}
-        <p class="meta">No recent launches are associated with this project yet.</p>
-      {% endif %}
-    </div>
-
-    <div style="margin-top: 18px;">
-      <h2 style="margin-top:0;">Recent Project Manager Conversation</h2>
-      {% if project_manager.recent_messages %}
-        <div class="conversation-list" style="margin-top: 12px;">
-          {% for message in project_manager.recent_messages %}
-            <div class="conversation-item {{ message.role }}">
-              <div class="conversation-header">
-                <div class="pill-row">
-                  <span class="pill small">{{ message.role }}</span>
-                  {% if message.message_type == "guidance_save" %}
-                    <span class="pill small">added to context</span>
-                  {% elif message.message_type == "ask" %}
-                    {% if message.urgency %}
-                      <span class="pill small">{{ message.urgency }}</span>
-                    {% endif %}
-                    {% if message.coding_agent_label %}
-                      <span class="pill small">{{ message.coding_agent_label }}</span>
-                    {% endif %}
-                    {% if message.execution_mode %}
-                      <span class="pill small">{{ message.execution_mode }}</span>
-                    {% endif %}
-                  {% elif message.decision_label %}
-                    <span class="pill small">{{ message.decision_label }}</span>
-                    {% if message.phase_label %}
-                      <span class="pill small">{{ message.phase_label }}</span>
-                    {% endif %}
-                  {% endif %}
-                </div>
-                <div class="meta">{{ message.created_at or "n/a" }}</div>
-              </div>
-              <div>{{ message.content_preview }}</div>
-            </div>
-          {% endfor %}
-        </div>
-      {% else %}
-        <p class="meta">No recent Project Manager conversation has been recorded yet.</p>
-      {% endif %}
-    </div>
-
-    <div style="margin-top: 18px;">
-      <div class="split">
-        <div>
-          <h2 style="margin-top:0;">Recent Ingested Outcomes</h2>
-          <div class="meta">Completed and failed project-linked jobs the manager is still using.</div>
-        </div>
-        <div class="meta">Last ingested {{ project_manager.state.last_job_ingested_at or "n/a" }}</div>
       </div>
-      {% if project_manager.recent_events %}
-        <div class="table-wrap">
-          <table class="data-table" style="margin-top: 8px; min-width: 760px;">
-            <thead>
-              <tr>
-                <th>Job</th>
-                <th>Status</th>
-                <th>Backend</th>
-                <th>Prompt</th>
-                <th>Outcome</th>
-                <th>Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for event in project_manager.recent_events %}
-                <tr>
-                  <td>
-                    <div class="stack-compact tight">
-                      {% if event.source_job_id %}
-                        <a href="/jobs/{{ event.source_job_id }}" title="{{ event.source_job_id }}">
-                          <span class="mono-inline">{{ event.source_job_short_id }}</span>
-                        </a>
-                      {% else %}
-                        <span class="mono-inline">n/a</span>
-                      {% endif %}
-                      <div class="meta">attempt {{ event.attempt_number or "n/a" }} · {{ event.created_at }}</div>
-                    </div>
-                  </td>
-                  <td><span class="pill small status-pill status-{{ event.outcome_status }}">{{ event.outcome_status }}</span></td>
-                  <td>
-                    <div class="stack-compact tight">
-                      <span class="pill small">{{ event.backend or "n/a" }}</span>
-                      <span class="meta">{{ event.provider or "n/a" }}</span>
-                    </div>
-                  </td>
-                  <td><div class="truncate-2" title="{{ event.prompt }}">{{ event.prompt or "n/a" }}</div></td>
-                  <td>
-                    {% if event.error_summary or event.error_reason %}
-                      <div class="truncate-2" title="{{ event.error_summary or event.error_reason }}">{{ event.error_summary or event.error_reason }}</div>
-                    {% else %}
-                      <div class="truncate-2" title="{{ event.response_summary_preview }}">{{ event.response_summary_preview or "Completed without an explicit summary." }}</div>
-                    {% endif %}
-                  </td>
-                  <td>
-                    <div class="stack-compact tight">
-                      {% if event.manual_testing_needed %}
-                        <span class="pill small status-pill status-waiting_retry">manual test</span>
-                      {% endif %}
-                      {% if event.changed_files %}
-                        <div class="meta truncate-2" title="{{ event.changed_files | join(', ') }}">
-                          {{ event.changed_files | join(", ") }}
-                        </div>
-                      {% elif event.stream_highlights %}
-                        <div class="meta truncate-2" title="{{ event.stream_highlights | join(' | ') }}">
-                          {{ event.stream_highlights | join(" | ") }}
-                        </div>
-                      {% else %}
-                        <div class="meta">No extra notes</div>
-                      {% endif %}
-                    </div>
-                  </td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <p class="meta">No completed or failed jobs have been ingested into project-manager memory yet.</p>
-      {% endif %}
-    </div>
-  </details>
-
-  <details class="panel disclosure" style="margin-top: 18px;" id="feedback-panel" {% if feedback_error %}open{% endif %}>
-    <summary class="section-summary disclosure-toggle">
-      <strong>Leave feedback</strong>
-      <span class="meta">{{ project_manager.recent_feedback | length }} recent entries</span>
-    </summary>
-    {% if feedback_error %}
-      <p style="color: var(--danger); margin-top: 12px;">{{ feedback_error }}</p>
-    {% endif %}
-    <div style="margin-top: 14px;">
-      <h2 style="margin-top:0;">Operator Feedback</h2>
-      <div class="meta">Record what you saw so the manager can react to real browser outcomes.</div>
-      <form method="post" action="/projects/{{ project.id }}/feedback" class="form-grid" style="margin-top: 12px;">
-        <label>
-          <span class="meta">Outcome</span><br />
-          <select name="outcome">
-            {% for option in ["passed", "failed", "mixed", "blocked"] %}
-              <option value="{{ option }}" {% if feedback_form_values.outcome == option %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          <span class="meta">Severity</span><br />
-          <select name="severity">
-            {% for option in ["low", "normal", "high", "critical"] %}
-              <option value="{{ option }}" {% if feedback_form_values.severity == option %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          <span class="meta">Area</span><br />
-          <select name="area">
-            <option value="" {% if not feedback_form_values.area %}selected{% endif %}>unspecified</option>
-            {% for option in ["layout", "actions", "settings", "diagnostics", "integrations", "project-manager", "other"] %}
-              <option value="{{ option }}" {% if feedback_form_values.area == option %}selected{% endif %}>{{ option }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label class="full">
-          <span class="meta">Notes</span><br />
-          <textarea name="notes" required style="min-height: 120px;">{{ feedback_form_values.notes }}</textarea>
-        </label>
-        <label class="full">
-          <span class="meta">Screenshot or artifact reference</span><br />
-          <input type="text" name="screenshot_reference" value="{{ feedback_form_values.screenshot_reference }}" placeholder="/absolute/path/to/screenshot.png or note about the capture" />
-        </label>
-        <label class="full">
-          <input type="checkbox" name="requires_followup" {% if feedback_form_values.requires_followup %}checked{% endif %} />
-          <span class="meta">Requires follow-up task</span>
-        </label>
-        <div class="full toolbar">
-          <button type="submit">Record Feedback</button>
-        </div>
-      </form>
-    </div>
-
-    {% if project_manager.recent_feedback %}
-      <div class="conversation-list" style="margin-top: 14px;">
-        {% for feedback in project_manager.recent_feedback %}
-          <div class="conversation-item">
-            <div class="conversation-header">
-              <div class="pill-row">
-                <span class="pill small status-pill status-{{ 'completed' if feedback.outcome == 'passed' else ('failed' if feedback.outcome == 'failed' else 'waiting_retry') }}">{{ feedback.outcome }}</span>
-                {% if feedback.severity %}
-                  <span class="pill small">{{ feedback.severity }}</span>
-                {% endif %}
-                {% if feedback.area %}
-                  <span class="pill small">{{ feedback.area }}</span>
-                {% endif %}
-                {% if feedback.requires_followup %}
-                  <span class="pill small status-pill status-waiting_retry">follow-up requested</span>
-                {% endif %}
-              </div>
-              <div class="meta">{{ feedback.created_at or "n/a" }}</div>
-            </div>
-            <div class="stack-compact">
-              <div>{{ feedback.notes_preview }}</div>
-              {% if feedback.screenshot_reference %}
-                <div class="meta truncate-1" title="{{ feedback.screenshot_reference }}">
-                  Screenshot or artifact: {{ feedback.screenshot_reference }}
-                </div>
-              {% endif %}
-            </div>
-          </div>
-        {% endfor %}
-      </div>
-    {% else %}
-      <p class="meta" style="margin-top: 12px;">No operator feedback has been recorded for this project yet.</p>
     {% endif %}
   </details>
 
-  <details class="panel disclosure" style="margin-top: 18px;" id="advanced-panel">
+  {# ── Advanced ── #}
+  <details class="panel disclosure" style="margin-top: 14px;" id="advanced-panel">
     <summary class="section-summary disclosure-toggle">
       <strong>Advanced</strong>
-      <span class="meta">{{ integration.status }} · integrations, quick launch, project tools</span>
+      <span class="meta">quick launch, integrations</span>
     </summary>
-    <div class="toolbar" style="margin-top: 14px;">
-      <a class="pill" href="/projects/{{ project.id }}/edit">Edit Project</a>
+    <div class="toolbar" style="margin-top: 12px;">
+      <a class="pill" href="/projects/{{ project.id }}/edit">Edit</a>
       <a class="pill" href="/doctor">Doctor</a>
-      <a class="pill" href="/jobs/new?project_id={{ project.id }}">Create Job from Project</a>
+      <a class="pill" href="/jobs/new?project_id={{ project.id }}">Full Job Form</a>
     </div>
 
-    <div class="grid columns" style="margin-top: 14px;">
-      <section class="panel">
-        <h2 style="margin-top:0;">Launch a New Task</h2>
-        <div class="meta">Use this if you already know the prompt.</div>
-        <form method="post" action="/projects/{{ project.id }}/launch" class="form-grid" style="margin-top: 12px;">
-          <label class="full">
-            <span class="meta">Prompt</span><br />
-            <textarea name="prompt" required></textarea>
-          </label>
-          <label>
-            <span class="meta">Task Type</span><br />
-            <input type="text" name="task_type" value="code" />
-          </label>
-          <label>
-            <span class="meta">Priority</span><br />
-            <input type="number" name="priority" value="0" />
-          </label>
-          <label>
-            <span class="meta">Max Attempts</span><br />
-            <input type="number" name="max_attempts" value="5" min="1" />
-          </label>
-          <div class="full toolbar">
-            <button type="submit">Launch Job</button>
-            <a class="pill" href="/jobs/new?project_id={{ project.id }}">Open Full Job Form</a>
-          </div>
-        </form>
-      </section>
-
-      <section class="panel">
-        <h2 style="margin-top:0;">Integrations</h2>
-        <div class="summary-grid">
-          <div>
-            <div class="meta">Status</div>
-            <div>{{ integration.status }}</div>
-          </div>
-          <div>
-            <div class="meta">Labels</div>
-            <div class="pill-row" style="margin-top: 6px;">
-              {% for label in integration.labels %}
-                <span class="pill small">{{ label }}</span>
-              {% else %}
-                <span class="meta">No integration labels</span>
-              {% endfor %}
-            </div>
-          </div>
+    <section class="panel" style="margin-top: 12px;">
+      <div class="meta" style="margin-bottom: 6px;">Quick Launch</div>
+      <form method="post" action="/projects/{{ project.id }}/launch" class="form-grid">
+        <label class="full">
+          <textarea name="prompt" required placeholder="Task prompt..."></textarea>
+        </label>
+        <label>
+          <span class="meta">Type</span><br />
+          <input type="text" name="task_type" value="code" />
+        </label>
+        <label>
+          <span class="meta">Priority</span><br />
+          <input type="number" name="priority" value="0" />
+        </label>
+        <label>
+          <span class="meta">Max Attempts</span><br />
+          <input type="number" name="max_attempts" value="5" min="1" />
+        </label>
+        <div class="full toolbar">
+          <button type="submit">Launch</button>
         </div>
-        {% if integration.summary.config_paths %}
-          <div class="meta-list" style="margin-top: 12px;">
-            {% for config_path in integration.summary.config_paths %}
-              <div>
-                <div class="meta">Config</div>
-                <div class="value-block path" title="{{ config_path }}">{{ config_path }}</div>
-              </div>
-            {% endfor %}
-          </div>
-        {% endif %}
-        {% if integration.summary.capabilities %}
-          <div style="margin-top: 12px;">
-            <strong>Capabilities</strong>
-            <div class="table-wrap">
-              <table class="data-table" style="margin-top: 8px; min-width: 520px;">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Source</th>
-                    <th>Kind</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for capability in integration.summary.capabilities %}
-                    <tr>
-                      <td>{{ capability.name }}</td>
-                      <td>{{ capability.source }}</td>
-                      <td>{{ capability.kind }}</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        {% else %}
-          <p class="meta">No explicit project or user integration config was discovered for this repo.</p>
-        {% endif %}
-        {% if integration.summary.notes %}
-          <div style="margin-top: 12px;">
-            <strong>Notes</strong>
-            <ul class="list-compact">
-              {% for note in integration.summary.notes %}
-                <li>{{ note }}</li>
-              {% endfor %}
-            </ul>
-          </div>
-        {% endif %}
+      </form>
+    </section>
+
+    {% if integration.summary.capabilities %}
+      <section class="panel" style="margin-top: 12px;">
+        <div class="meta" style="margin-bottom: 6px;">Integrations · {{ integration.status }}</div>
+        <div class="pill-row">
+          {% for label in integration.labels %}
+            <span class="pill small">{{ label }}</span>
+          {% endfor %}
+        </div>
       </section>
-    </div>
+    {% endif %}
   </details>
+
   <script>
     (() => {
       const regionId = "project-workspace-live-region";

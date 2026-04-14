@@ -193,6 +193,7 @@ class SavedProject:
     created_at: datetime
     updated_at: datetime
     autonomy_mode: str = "minimal"
+    initial_context: Optional[str] = None
 
 
 @dataclass

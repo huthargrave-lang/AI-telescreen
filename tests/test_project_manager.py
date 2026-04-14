@@ -251,7 +251,7 @@ def test_project_manager_minimal_autonomy_waits_for_confirmation(tmp_path):
     assert snapshot.state.latest_response is not None
     assert snapshot.state.latest_response.draft_task is not None
     assert repository.list_project_jobs(project.id, limit=10) == []
-    assert "asks before every task" in snapshot.state.display_snapshot["workflow_helper_text"]
+    assert "Waiting for approval" in snapshot.state.display_snapshot["workflow_helper_text"]
 
 
 def test_project_manager_partial_autonomy_launches_then_waits_for_continue(tmp_path):
@@ -478,7 +478,7 @@ def test_project_manager_guidance_is_compacted_into_memory(tmp_path):
     assert loaded is not None
     assert len(loaded.project_guidance) <= 4
     assert int(loaded.rolling_facts.get("saved_guidance_count", 0)) >= 1
-    assert "project context" in snapshot.state.display_snapshot["memory_summary"].lower()
+    assert "guidance" in snapshot.state.display_snapshot["memory_summary"].lower()
 
 
 def test_project_manager_session_ledger_tracks_latest_result_and_context(tmp_path):

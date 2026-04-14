@@ -4,9 +4,7 @@
   <div class="header">
     <div>
       <h1 class="title">AI Telescreen</h1>
-      <p class="subtitle">
-        Launch, monitor, retry, cancel, and clean up coding tasks from one browser-first cockpit.
-      </p>
+      <p class="subtitle">Manage projects and coding tasks.</p>
     </div>
     <div class="toolbar">
       <a class="pill" href="/jobs/new">Create Job</a>
@@ -31,7 +29,7 @@
       <div class="split">
         <div>
           <h2 style="margin:0;">Projects</h2>
-          <div class="meta">Projects are saved repositories with launch defaults. Use them as repeatable starting points for new tasks.</div>
+          <div class="meta">Saved project workspaces.</div>
         </div>
         <div class="toolbar">
           <a class="pill" href="/projects">Open Projects</a>
@@ -86,13 +84,13 @@
           </table>
         </div>
       {% else %}
-        <p class="meta" style="margin-top: 12px;">No saved projects yet. Add one to reuse repo, backend, branch, and workspace defaults when launching tasks.</p>
+        <p class="meta" style="margin-top: 12px;">No projects yet.</p>
       {% endif %}
     </section>
 
     <section class="panel">
       <h2 style="margin-top:0;">Queue Control</h2>
-      <p class="meta">Queued jobs are waiting to start. You can start one job directly with Run Now, or run one browser-triggered pass over the queue here.</p>
+      <p class="meta">Start queued jobs or trigger a worker pass.</p>
       <div class="meta-list" style="margin-bottom: 12px;">
         <div>Running jobs: {{ worker_panel.running_jobs }}</div>
         <div>Queued jobs: {{ worker_panel.queued_jobs }}</div>
@@ -111,7 +109,7 @@
     <div style="display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom: 12px;">
       <div>
         <h2 style="margin:0;">Jobs</h2>
-        <div class="meta">Queued jobs have not started yet. Use Run Now to start one immediately, Cancel to stop it before it runs, and Delete to remove accidental test or duplicate jobs.</div>
+        <div class="meta">All tasks across projects.</div>
       </div>
       <a class="pill" href="/jobs/new">Create Job</a>
     </div>

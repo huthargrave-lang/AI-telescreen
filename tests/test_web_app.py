@@ -749,15 +749,10 @@ def test_project_detail_renders_project_manager_summary(tmp_path):
 
     assert detail.status_code == 200
     assert "Project Manager" in detail.text
-    assert "Live workspace" in detail.text
-    assert "Coding Agent" in detail.text
-    assert "Live handoff" in detail.text
-    assert "Manual verification" in detail.text
-    assert "manual testing needed" in detail.text
-    assert "Show details" in detail.text
+    assert "action needed" in detail.text.lower() or "Action needed" in detail.text
     assert "Details" in detail.text
     assert "History" in detail.text
-    assert "Leave feedback" in detail.text
+    assert "Feedback" in detail.text
     assert "Advanced" in detail.text
     assert detail.text.count('<details class="panel disclosure"') >= 4
     assert "No new task yet" in detail.text
@@ -1359,9 +1354,8 @@ def test_project_manager_session_shows_manual_test_pause(tmp_path):
     detail = client.get(f"/projects/{project.id}")
 
     assert detail.status_code == 200
-    assert "Waiting for manual testing" in detail.text
-    assert "manual test needed" in detail.text
-    assert "Record test result" in detail.text
+    assert "Action needed" in detail.text or "action needed" in detail.text
+    assert "Record result" in detail.text
     assert _short_id(auto_job.id) in detail.text
 
 

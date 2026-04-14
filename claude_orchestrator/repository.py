@@ -304,6 +304,7 @@ class JobRepository:
         default_use_git_worktree: bool,
         notes: Optional[str],
         autonomy_mode: str = "minimal",
+        initial_context: Optional[str] = None,
     ) -> SavedProject:
         project_id = str(uuid.uuid4())
         now = utcnow()
@@ -320,9 +321,10 @@ class JobRepository:
                     default_use_git_worktree,
                     notes,
                     autonomy_mode,
+                    initial_context,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     project_id,
@@ -334,6 +336,7 @@ class JobRepository:
                     1 if default_use_git_worktree else 0,
                     notes,
                     autonomy_mode,
+                    initial_context,
                     to_iso8601(now),
                     to_iso8601(now),
                 ),
@@ -372,6 +375,7 @@ class JobRepository:
         default_use_git_worktree: bool,
         notes: Optional[str],
         autonomy_mode: str = "minimal",
+        initial_context: Optional[str] = None,
     ) -> SavedProject:
         now = utcnow()
         with self.db.connect() as connection:
@@ -387,6 +391,7 @@ class JobRepository:
                     default_use_git_worktree = ?,
                     notes = ?,
                     autonomy_mode = ?,
+                    initial_context = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -399,6 +404,7 @@ class JobRepository:
                     1 if default_use_git_worktree else 0,
                     notes,
                     autonomy_mode,
+                    initial_context,
                     to_iso8601(now),
                     project_id,
                 ),
@@ -1610,6 +1616,11 @@ class JobRepository:
         )
 
     def _row_to_saved_project(self, row: Any) -> SavedProject:
+        initial_context = None
+        try:
+            initial_context = row["initial_context"]
+        except (IndexError, KeyError):
+            pass
         return SavedProject(
             id=row["id"],
             name=row["name"],
@@ -1622,6 +1633,7 @@ class JobRepository:
             created_at=from_iso8601(row["created_at"]) or utcnow(),
             updated_at=from_iso8601(row["updated_at"]) or utcnow(),
             autonomy_mode=row["autonomy_mode"] or "minimal",
+            initial_context=initial_context,
         )
 
     def _row_to_project_manager_state(self, row: Any) -> ProjectManagerState:
