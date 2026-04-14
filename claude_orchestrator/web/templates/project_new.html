@@ -22,17 +22,21 @@
         <span class="meta">Repo Path</span><br />
         <input type="text" name="repo_path" value="{{ form_values.repo_path }}" required />
       </label>
+      <label class="full">
+        <span class="meta">Project Context</span><br />
+        <textarea name="initial_context" style="min-height: 100px;" placeholder="Describe the project goals, architecture, constraints, or any context the manager should know from the start.">{{ form_values.initial_context }}</textarea>
+        <div class="meta" style="margin-top: 4px;">This seeds the manager's memory. It will be automatically maintained and expanded as work progresses.</div>
+      </label>
       <label>
-        <span class="meta">Default Coding Agent</span><br />
+        <span class="meta">Default Agent</span><br />
         <select name="default_backend">
           {% for option in coding_agent_options %}
             <option value="{{ option.value }}" {% if form_values.default_backend == option.value %}selected{% endif %}>{{ option.label }}{% if option.hint %} ({{ option.hint }}){% endif %}</option>
           {% endfor %}
         </select>
-        <div class="meta" style="margin-top: 8px;">This sets the default executor for launched project tasks, not the Project Manager itself.</div>
       </label>
       <label>
-        <span class="meta">Default Provider</span><br />
+        <span class="meta">Provider</span><br />
         <select name="default_provider">
           <option value="">Auto</option>
           {% for provider_name in available_providers %}
@@ -41,27 +45,27 @@
         </select>
       </label>
       <label>
-        <span class="meta">Default Base Branch</span><br />
+        <span class="meta">Base Branch</span><br />
         <input type="text" name="default_base_branch" value="{{ form_values.default_base_branch }}" />
       </label>
       <label>
-        <span class="meta">Workspace Mode</span><br />
+        <span class="meta">Workspace</span><br />
         <div style="margin-top: 10px;">
           <label>
             <input type="checkbox" name="default_use_git_worktree" {% if form_values.default_use_git_worktree %}checked{% endif %} />
-            use git worktree by default
+            Use git worktree
           </label>
         </div>
       </label>
       <label>
-        <span class="meta">Project Manager Autonomy</span><br />
+        <span class="meta">Autonomy</span><br />
         <select name="autonomy_mode">
           <option value="minimal" {% if form_values.autonomy_mode == "minimal" %}selected{% endif %}>Minimal</option>
           <option value="partial" {% if form_values.autonomy_mode == "partial" %}selected{% endif %}>Partial</option>
           <option value="full" {% if form_values.autonomy_mode == "full" %}selected{% endif %}>Full</option>
         </select>
-        <div class="meta" style="margin-top: 8px;">
-          Minimal asks before every task. Partial runs one supervised step, then asks whether to continue. Full can keep iterating until it hits a stop condition.
+        <div class="meta" style="margin-top: 4px;">
+          Minimal asks before every task. Partial runs one step then asks. Full continues until a stop condition.
         </div>
       </label>
       <label class="full">

@@ -286,10 +286,10 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 return None
             return {
                 "launch_followup_job": "draft ready",
-                "request_manual_test": "manual test",
+                "request_manual_test": "action needed",
                 "wait_for_operator": "waiting",
                 "mark_complete": "stable",
-                "needs_clarification": "needs scope",
+                "needs_clarification": "needs input",
             }.get(decision, _humanize_label(decision))
 
         return {
@@ -414,7 +414,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         elif session.workflow_state == "awaiting_continue_decision":
             state_badges.append({"label": "waiting on operator", "class_name": "status-pill status-waiting_retry"})
         elif session.workflow_state == "blocked_on_manual_test":
-            state_badges.append({"label": "manual test needed", "class_name": "status-pill status-waiting_retry"})
+            state_badges.append({"label": "action needed", "class_name": "status-pill status-waiting_retry"})
         elif session.active_managed_job_status == JobStatus.WAITING_RETRY.value:
             state_badges.append({"label": "waiting to retry", "class_name": "status-pill status-waiting_retry"})
         elif session.active_managed_job_status == JobStatus.FAILED.value:
@@ -466,29 +466,29 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 return {
                     "interval_seconds": 4,
                     "mode": "active",
-                    "label": "Live updates every 4s while the current task is active.",
+                    "label": "Live · 4s",
                 }
             return {
                 "interval_seconds": 6,
                 "mode": "settling",
-                "label": "Refreshing every 6s while the manager settles the latest result.",
+                "label": "Settling · 6s",
             }
         if workflow_state in {"awaiting_continue_decision", "blocked_on_manual_test"}:
             return {
                 "interval_seconds": 6,
                 "mode": "paused",
-                "label": "Refreshing every 6s while the manager is waiting on the next decision.",
+                "label": "Paused · 6s",
             }
         if workflow_state == "awaiting_confirmation":
             return {
                 "interval_seconds": 15,
                 "mode": "idle",
-                "label": "Checking every 15s while the workspace is idle.",
+                "label": "Idle · 15s",
             }
         return {
             "interval_seconds": 20,
             "mode": "idle",
-            "label": "Checking every 20s while no manager-owned task is active.",
+            "label": "Idle · 20s",
         }
 
     def _managed_focus_job(session: dict, jobs: list[dict]) -> Optional[dict]:
@@ -551,105 +551,94 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             if workflow_state == "blocked_on_manual_test":
                 return {
                     "kind": "feedback",
-                    "label": "Record test result",
-                    "detail": "Open the feedback form so I can use your manual test result before planning the next step.",
+                    "label": "Record result",
+                    "detail": "Provide your test result to continue.",
                 }
             if workflow_state == "awaiting_continue_decision" and draft_task:
-                label = _draft_launch_label(mode, continue_step=True)
                 return {
                     "kind": "continue",
-                    "label": label,
-                    "detail": f"This will hand the next {_execution_mode_label(mode)} to {coding_agent_label}.",
+                    "label": "Continue",
+                    "detail": "",
                 }
             if workflow_state != "running_current_task" and response.get("decision") == "launch_followup_job" and draft_task:
-                label = _draft_launch_label(mode)
                 return {
                     "kind": "launch_draft",
-                    "label": label,
-                    "detail": f"This will hand the drafted {_execution_mode_label(mode)} to {coding_agent_label}.",
+                    "label": "Run",
+                    "detail": "",
                 }
             if focus_job and focus_job.get("status") == JobStatus.WAITING_RETRY.value and focus_job.get("actions", {}).get("retry"):
                 return {
                     "kind": "retry_job",
-                    "label": "Retry task",
-                    "detail": "This will requeue the current task for another attempt.",
+                    "label": "Retry",
+                    "detail": "",
                 }
             return {
                 "kind": None,
                 "label": None,
-                "detail": (
-                    "No button is needed right now. I’ll update this space when the current workflow changes."
-                    if workflow_state == "running_current_task"
-                    else display.get("reply_question") or "Ask a follow-up when you want to steer the next step."
-                ),
+                "detail": "",
             }
 
         if workflow_state == "running_current_task":
             if session.get("waiting_on_worker"):
-                manager_headline = "I handed off the current step."
-                manager_detail = "The task is queued and waiting for a worker right now."
-                manager_action = "Run queued jobs once or keep a worker active to move it forward."
+                manager_headline = "Task queued"
+                manager_detail = "Waiting for a worker to pick it up."
+                manager_action = ""
             elif session.get("active_job_status") == JobStatus.RUNNING.value:
-                manager_headline = "I handed off the current step and I’m waiting on the result."
+                manager_headline = "Working"
                 manager_detail = (
                     (focus_job or {}).get("latest_progress_preview")
-                    or "The coding agent is working now. I’ll review the result as soon as it finishes."
+                    or "Agent is executing the current step."
                 )
-                manager_action = "I’ll report back after the current job completes."
+                manager_action = ""
             elif session.get("active_job_status") == JobStatus.WAITING_RETRY.value:
-                manager_headline = "I’m still waiting on the current task."
-                manager_detail = "The coding agent hit a retryable problem and is waiting for the next attempt."
-                manager_action = "I’ll reassess as soon as that retry runs."
+                manager_headline = "Retrying"
+                manager_detail = "Hit a temporary issue. Retrying shortly."
+                manager_action = ""
             else:
-                manager_headline = display.get("reply_lead") or session.get("headline")
-                manager_detail = session.get("detail")
-                manager_action = "I’ll update the plan when the current task changes state."
+                manager_headline = display.get("reply_lead") or "Processing"
+                manager_detail = session.get("detail") or ""
+                manager_action = ""
         elif workflow_state == "awaiting_continue_decision":
-            manager_headline = "I reviewed the finished task and found the next likely step."
-            manager_detail = response.get("reason") or display.get("reply_why") or session.get("detail")
-            manager_action = "Want me to keep going?"
+            manager_headline = "Step complete. Ready for next."
+            manager_detail = response.get("reason") or display.get("reply_why") or session.get("detail") or ""
+            manager_action = "Continue?"
         elif workflow_state == "blocked_on_manual_test":
-            manager_headline = "I’m paused until manual testing is complete."
-            manager_detail = response.get("reason") or session.get("detail")
-            manager_action = "Leave feedback when the check is done and I’ll use it in the next decision."
+            manager_headline = "Action needed"
+            manager_detail = response.get("reason") or session.get("detail") or ""
+            manager_action = "Record your result below to continue."
         elif workflow_state == "awaiting_confirmation":
-            manager_headline = display.get("reply_lead") or "I have the next step ready."
-            if session.get("autonomy_mode") == "minimal":
-                manager_detail = "Minimal autonomy keeps chat separate from execution and asks before every task."
-            elif session.get("autonomy_mode") == "partial":
-                manager_detail = "Partial autonomy recommends the next step and waits for your go-ahead before it starts that task."
-            else:
-                manager_detail = session.get("detail")
-            manager_action = display.get("reply_question") or "Run it when you want me to hand it to the coding agent."
+            manager_headline = display.get("reply_lead") or "Ready to run"
+            manager_detail = session.get("detail") or ""
+            manager_action = display.get("reply_question") or ""
         else:
-            manager_headline = display.get("reply_lead") or session.get("headline")
-            manager_detail = display.get("reply_why") or session.get("detail")
-            manager_action = display.get("reply_question") or "Ask follow-up when you want the next step."
+            manager_headline = display.get("reply_lead") or session.get("headline") or "Idle"
+            manager_detail = display.get("reply_why") or session.get("detail") or ""
+            manager_action = ""
 
         if workflow_state == "blocked_on_manual_test":
-            next_need_label = "Waiting for manual testing"
-            next_need_detail = "Record what you observed before I launch another task."
+            next_need_label = "Action needed"
+            next_need_detail = "Record your test result to unblock."
         elif workflow_state == "awaiting_continue_decision":
-            next_need_label = "Ready to continue"
-            next_need_detail = response.get("reason") or "I found the next likely follow-up task and I’m waiting on your decision."
+            next_need_label = "Ready"
+            next_need_detail = response.get("reason") or "Next step is prepared."
         elif workflow_state == "awaiting_confirmation":
-            next_need_label = "Ready to run review" if execution_mode == "read_only" else "Ready to run follow-up task"
-            next_need_detail = manager_detail
+            next_need_label = "Awaiting approval"
+            next_need_detail = ""
         elif workflow_state == "running_current_task" and session.get("waiting_on_worker"):
-            next_need_label = "Waiting for worker pickup"
-            next_need_detail = session.get("detail") or "The task is queued until a worker claims it."
+            next_need_label = "Queued"
+            next_need_detail = "Waiting for worker."
         elif workflow_state == "running_current_task":
-            next_need_label = "Waiting for task result"
-            next_need_detail = "I’m watching the current task and will decide what happens next when it finishes."
+            next_need_label = "Running"
+            next_need_detail = ""
         elif response.get("decision") == "needs_clarification":
-            next_need_label = "Blocked until operator input"
-            next_need_detail = response.get("reason") or manager_action
+            next_need_label = "Needs input"
+            next_need_detail = response.get("reason") or ""
         elif response.get("decision") == "mark_complete":
-            next_need_label = "Ready to wrap up"
-            next_need_detail = response.get("reason") or "The current phase looks stable unless you want one more pass."
+            next_need_label = "Complete"
+            next_need_detail = response.get("reason") or ""
         else:
-            next_need_label = "Ready for the next step"
-            next_need_detail = manager_action
+            next_need_label = "Idle"
+            next_need_detail = ""
 
         chat_turn = {
             "operator": _truncate_text(
@@ -800,23 +789,22 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             if not manual_test_checklist and (latest_event or {}).get("testing_notes"):
                 manual_test_checklist = [str((latest_event or {}).get("testing_notes"))]
             test_next = {
-                "headline": "Test this next",
-                "detail": (latest_event or {}).get("testing_notes")
-                or "Manual testing is still needed before I launch another coding task.",
+                "headline": "Action needed",
+                "detail": (latest_event or {}).get("testing_notes") or "Verify the changes, then record your result.",
                 "checklist_items": manual_test_checklist[:4],
                 "needs_manual_testing": True,
             }
         elif focus_job and focus_job.get("status") == JobStatus.COMPLETED.value:
             test_next = {
-                "headline": "Test this next",
-                "detail": "No manual test is requested right now.",
+                "headline": "",
+                "detail": "",
                 "checklist_items": [],
                 "needs_manual_testing": False,
             }
         else:
             test_next = {
-                "headline": "Test this next",
-                "detail": "I’ll add a concrete checklist here when manual testing becomes relevant.",
+                "headline": "",
+                "detail": "",
                 "checklist_items": [],
                 "needs_manual_testing": False,
             }
@@ -862,22 +850,22 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         if workflow_state == "awaiting_continue_decision":
             timeline.append(
                 {
-                    "label": "Manager asking whether to continue",
-                    "text": "The current supervised step is done and the next step is ready if you want it.",
+                    "label": "Ready for next step",
+                    "text": "Approve to continue.",
                 }
             )
         elif workflow_state == "blocked_on_manual_test":
             timeline.append(
                 {
-                    "label": "Manager blocked on manual testing",
-                    "text": "Leave operator feedback after the check so the manager can plan the next move.",
+                    "label": "Action needed",
+                    "text": "Record your test result to unblock.",
                 }
             )
         elif workflow_state == "running_current_task" and session.get("waiting_on_worker"):
             timeline.append(
                 {
-                    "label": "Waiting for worker pickup",
-                    "text": "The queue has the task, but a worker still needs to claim it.",
+                    "label": "Queued",
+                    "text": "Waiting for worker.",
                 }
             )
 
@@ -1130,6 +1118,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "default_use_git_worktree": False,
             "autonomy_mode": "minimal",
             "notes": "",
+            "initial_context": "",
         }
         if form_values:
             values.update(form_values)
@@ -1141,11 +1130,11 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "available_providers": _available_providers(),
             "error": error,
             "project": project,
-            "page_title": "Edit Project" if project else "Add Project",
+            "page_title": "Edit Project" if project else "New Project",
             "page_subtitle": (
-                "Update launch defaults and repository notes for this saved project."
+                "Update project settings."
                 if project
-                else "Register a repository once, then launch jobs with browser-friendly defaults."
+                else "Set up a new project workspace."
             ),
             "form_action": f"/projects/{project.id}/edit" if project else "/projects",
             "submit_label": "Save Changes" if project else "Save Project",
@@ -1721,6 +1710,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "default_use_git_worktree": _coerce_checkbox(form.get("default_use_git_worktree")),
             "autonomy_mode": str(form.get("autonomy_mode") or "minimal"),
             "notes": str(form.get("notes") or ""),
+            "initial_context": str(form.get("initial_context") or ""),
         }
         try:
             if not form_values["name"].strip():
@@ -1740,6 +1730,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 default_use_git_worktree=form_values["default_use_git_worktree"],
                 notes=form_values["notes"].strip() or None,
                 autonomy_mode=form_values["autonomy_mode"] or "minimal",
+                initial_context=form_values["initial_context"].strip() or None,
             )
         except Exception as exc:
             return templates.TemplateResponse(
@@ -1768,6 +1759,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     "default_use_git_worktree": project.default_use_git_worktree,
                     "autonomy_mode": project.autonomy_mode,
                     "notes": project.notes or "",
+                    "initial_context": project.initial_context or "",
                 },
             ),
         )
@@ -1786,6 +1778,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "default_use_git_worktree": _coerce_checkbox(form.get("default_use_git_worktree")),
             "autonomy_mode": str(form.get("autonomy_mode") or "minimal"),
             "notes": str(form.get("notes") or ""),
+            "initial_context": str(form.get("initial_context") or ""),
         }
         try:
             if not form_values["name"].strip():
@@ -1806,6 +1799,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 default_use_git_worktree=form_values["default_use_git_worktree"],
                 notes=form_values["notes"].strip() or None,
                 autonomy_mode=form_values["autonomy_mode"] or "minimal",
+                initial_context=form_values["initial_context"].strip() or None,
             )
         except Exception as exc:
             return templates.TemplateResponse(

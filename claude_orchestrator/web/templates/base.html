@@ -384,9 +384,130 @@
         cursor: pointer;
         color: var(--accent);
       }
+
+      /* Chat-style workspace */
+      .chat-thread {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .chat-bubble {
+        padding: 10px 14px;
+        border-radius: 16px;
+        max-width: 85%;
+        font-size: 0.94rem;
+        line-height: 1.45;
+      }
+      .chat-bubble.user {
+        align-self: flex-end;
+        background: rgba(0, 95, 115, 0.10);
+        border-bottom-right-radius: 4px;
+      }
+      .chat-bubble.agent {
+        align-self: flex-start;
+        background: rgba(29, 29, 26, 0.05);
+        border-bottom-left-radius: 4px;
+      }
+      .chat-bubble .chat-role {
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin-bottom: 3px;
+      }
+
+      /* Workspace status bar */
+      .ws-status-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 8px 0;
+      }
+      .ws-status-bar .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--muted);
+        flex-shrink: 0;
+      }
+      .ws-status-bar .status-dot.active {
+        background: var(--ok);
+        box-shadow: 0 0 6px rgba(15, 118, 110, 0.4);
+      }
+      .ws-status-bar .status-dot.running {
+        background: var(--warn);
+        animation: pulse-dot 1.5s ease-in-out infinite;
+      }
+      .ws-status-bar .status-dot.blocked {
+        background: var(--danger);
+      }
+      @keyframes pulse-dot {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+
+      /* Action card for blocked states */
+      .action-card {
+        padding: 14px 16px;
+        border-radius: 16px;
+        border: 2px solid var(--warn);
+        background: rgba(154, 103, 0, 0.05);
+      }
+      .action-card.urgent {
+        border-color: var(--danger);
+        background: rgba(180, 35, 24, 0.04);
+      }
+      .action-card h3 {
+        margin: 0 0 6px 0;
+        font-size: 1rem;
+      }
+      .action-card .action-steps {
+        margin: 8px 0 0 18px;
+        padding: 0;
+        display: grid;
+        gap: 4px;
+        font-size: 0.92rem;
+      }
+
+      /* Compact summary card */
+      .summary-card {
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: rgba(29, 29, 26, 0.03);
+        border: 1px solid var(--border);
+      }
+      .summary-card .sc-label {
+        font-size: 0.78rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      /* Minimal composer */
+      .composer-row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-end;
+      }
+      .composer-row textarea {
+        min-height: 56px;
+        flex: 1;
+        border-radius: 16px;
+        resize: vertical;
+      }
+      .composer-row button {
+        flex-shrink: 0;
+        white-space: nowrap;
+      }
+
       @media (max-width: 720px) {
         .shell { padding: 16px; }
         .header { display: block; }
+        .chat-bubble { max-width: 95%; }
       }
     </style>
   </head>

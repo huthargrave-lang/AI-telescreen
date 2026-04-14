@@ -180,7 +180,7 @@ class LeaseHeartbeat:
 class OrchestratorService:
     """Coordinates persistence, retries, recovery, and backend execution."""
 
-    PROJECT_MANAGER_FULL_AUTONOMY_LIMIT = 3
+    PROJECT_MANAGER_FULL_AUTONOMY_LIMIT = 10
     CLAUDE_CODING_BACKEND_PREFERENCE = ("claude_code_cli", "messages_api", "message_batches")
 
     def __init__(
@@ -391,6 +391,7 @@ class OrchestratorService:
         default_use_git_worktree: bool = False,
         notes: Optional[str] = None,
         autonomy_mode: str = "minimal",
+        initial_context: Optional[str] = None,
     ) -> SavedProject:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
@@ -404,8 +405,11 @@ class OrchestratorService:
             default_use_git_worktree=default_use_git_worktree,
             notes=notes,
             autonomy_mode=autonomy_mode,
+            initial_context=initial_context,
         )
         self.project_manager.sync_project(project.id)
+        if initial_context and initial_context.strip():
+            self.project_manager._store_project_guidance(project.id, initial_context.strip())
         return project
 
     def update_saved_project(
@@ -420,6 +424,7 @@ class OrchestratorService:
         default_use_git_worktree: bool = False,
         notes: Optional[str] = None,
         autonomy_mode: str = "minimal",
+        initial_context: Optional[str] = None,
     ) -> SavedProject:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
@@ -434,6 +439,7 @@ class OrchestratorService:
             default_use_git_worktree=default_use_git_worktree,
             notes=notes,
             autonomy_mode=autonomy_mode,
+            initial_context=initial_context,
         )
         self.project_manager.sync_project(project.id)
         return project
@@ -1950,13 +1956,16 @@ class OrchestratorService:
                     auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
                 )
         if response.needs_manual_testing or response.decision == "request_manual_test":
-            return self.project_manager.update_workflow_state(
-                project.id,
-                workflow_state="blocked_on_manual_test",
-                active_job_id=None,
-                active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
-                auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
-            )
+            if autonomy_mode == "full" and response.decision != "request_manual_test":
+                pass
+            else:
+                return self.project_manager.update_workflow_state(
+                    project.id,
+                    workflow_state="blocked_on_manual_test",
+                    active_job_id=None,
+                    active_autonomy_session_id=session_id or snapshot.state.active_autonomy_session_id,
+                    auto_tasks_run_count=snapshot.state.auto_tasks_run_count,
+                )
         if response.decision != "launch_followup_job" or response.draft_task is None:
             fallback_state = "awaiting_continue_decision" if autonomy_mode == "partial" and trigger == "outcome" else "idle"
             return self.project_manager.update_workflow_state(

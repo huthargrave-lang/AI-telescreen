@@ -1911,7 +1911,11 @@ class ProjectManagerService:
                 return "running_current_task"
             workflow_state = "idle" if workflow_state == "running_current_task" else workflow_state
         if needs_manual_testing:
-            return "blocked_on_manual_test"
+            autonomy_mode = self._normalize_autonomy_mode(project.autonomy_mode)
+            if autonomy_mode == "full" and latest_response.decision != "request_manual_test":
+                pass
+            else:
+                return "blocked_on_manual_test"
         if self._normalize_autonomy_mode(project.autonomy_mode) == "minimal":
             if latest_response.draft_task and latest_response.decision == "launch_followup_job":
                 return "awaiting_confirmation"
@@ -1929,29 +1933,18 @@ class ProjectManagerService:
         auto_tasks_run_count: int,
     ) -> str:
         if workflow_state == "running_current_task":
-            if active_job_id:
-                return (
-                    f"The manager launched a supervised task for this project: {active_job_id}. "
-                    "With a worker active, it will report back after the job finishes."
-                )
-            return "The manager launched the current supervised task and will report back after the coding-agent result is ingested."
+            return "Task running."
         if workflow_state == "awaiting_continue_decision":
-            return "Partial autonomy finished the current approved step and is waiting to hear whether it should keep going."
+            return "Step complete. Waiting for approval."
         if workflow_state == "blocked_on_manual_test":
-            return "The manager is paused until manual testing or operator judgment clears the next step."
+            return "Paused. Action needed."
         if workflow_state == "awaiting_confirmation":
-            if autonomy_mode == "minimal":
-                return "Minimal autonomy keeps manager chat separate from execution and asks before every task."
-            if autonomy_mode == "partial":
-                return "Partial autonomy recommends the next supervised step and waits for approval before it starts that task."
-            return "The manager drafted the next step and is waiting for operator confirmation before it launches more work."
-        if autonomy_mode == "full" and auto_tasks_run_count:
-            return "Full autonomy can keep iterating through related low-risk steps, but it still stops for manual testing, ambiguity, repeated failure, low confidence, or the session task limit."
-        if autonomy_mode == "partial":
-            return "Partial autonomy runs one supervised step at a time, then comes back to you before it continues."
+            return "Next step ready. Waiting for approval."
         if autonomy_mode == "full":
-            return "Full autonomy can inspect, launch, review, and continue until it hits a real stop condition."
-        return "The manager keeps one compact Project Context and will wait for the next operator instruction."
+            return "Full autonomy active."
+        if autonomy_mode == "partial":
+            return "Partial autonomy. Runs one step, then asks."
+        return "Waiting for instruction."
 
     def _build_memory_summary(
         self,
@@ -1960,18 +1953,16 @@ class ProjectManagerService:
         rolling_summary: Optional[str],
         rolling_facts: Dict[str, Any],
     ) -> str:
-        parts = [
-            "The Project Manager keeps one compact, manager-owned Project Context. Operator prompts, manager replies, job outcomes, feedback, and saved operator guidance all feed into it."
-        ]
+        parts = []
         if project_guidance:
-            parts.append(f"Saved operator guidance kept ready: {len(project_guidance)}.")
+            parts.append(f"{len(project_guidance)} saved guidance items.")
         if rolling_facts.get("compacted_event_count"):
-            parts.append(f"Older outcomes summarized: {rolling_facts.get('compacted_event_count', 0)}.")
+            parts.append(f"{rolling_facts.get('compacted_event_count', 0)} past outcomes summarized.")
         if rolling_facts.get("operator_feedback_count"):
-            parts.append(f"Older feedback summarized: {rolling_facts.get('operator_feedback_count', 0)}.")
-        if rolling_summary:
-            parts.append("Recent highlights are already compressed into the rolling summary.")
-        return self._truncate(" ".join(parts), 280) or ""
+            parts.append(f"{rolling_facts.get('operator_feedback_count', 0)} past feedback entries.")
+        if not parts:
+            parts.append("Context builds automatically as tasks complete.")
+        return self._truncate(" ".join(parts), 200) or ""
 
     def _build_project_context(
         self,
