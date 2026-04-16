@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -37,7 +37,7 @@ from ..models import (
 )
 from ..providers import infer_provider, validate_provider_backend
 from ..repository import JobRepository
-from ..retry import ConfigurationError, RetryPolicy, RetryableBackendError, UserCancelledError
+from ..retry import ConfigurationError, RetryPolicy, RetryableBackendError, UserCancelledError, parse_retry_after
 from ..timeutils import utcnow
 from ..workspaces import (
     cleanup_job_workspace,
@@ -392,6 +392,8 @@ class OrchestratorService:
         notes: Optional[str] = None,
         autonomy_mode: str = "minimal",
         initial_context: Optional[str] = None,
+        default_model: Optional[str] = None,
+        auto_resume_on_quota: bool = False,
     ) -> SavedProject:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
@@ -406,6 +408,8 @@ class OrchestratorService:
             notes=notes,
             autonomy_mode=autonomy_mode,
             initial_context=initial_context,
+            default_model=default_model,
+            auto_resume_on_quota=auto_resume_on_quota,
         )
         self.project_manager.sync_project(project.id)
         if initial_context and initial_context.strip():
@@ -425,6 +429,8 @@ class OrchestratorService:
         notes: Optional[str] = None,
         autonomy_mode: str = "minimal",
         initial_context: Optional[str] = None,
+        default_model: Optional[str] = None,
+        auto_resume_on_quota: bool = False,
     ) -> SavedProject:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
@@ -440,6 +446,8 @@ class OrchestratorService:
             notes=notes,
             autonomy_mode=autonomy_mode,
             initial_context=initial_context,
+            default_model=default_model,
+            auto_resume_on_quota=auto_resume_on_quota,
         )
         self.project_manager.sync_project(project.id)
         return project
@@ -456,6 +464,8 @@ class OrchestratorService:
             default_use_git_worktree=project.default_use_git_worktree,
             notes=project.notes,
             autonomy_mode=autonomy_mode,
+            default_model=project.default_model,
+            auto_resume_on_quota=project.auto_resume_on_quota,
         )
 
     def launch_job_from_project(
@@ -495,7 +505,7 @@ class OrchestratorService:
                 priority=priority,
                 metadata=metadata,
                 max_attempts=max_attempts,
-                model=model,
+                model=model or project.default_model,
             )
         )
 
@@ -2216,6 +2226,32 @@ class OrchestratorService:
             )
             self._maybe_cleanup_workspace(job, outcome="cancelled")
         else:
+            resume_at = self._check_auto_resume_on_quota(job, decision)
+            if resume_at is not None:
+                self.repository.update_job_status(
+                    job.id,
+                    target_status=JobStatus.WAITING_RETRY,
+                    current_status=expected_status,
+                    next_retry_at=resume_at,
+                    last_error_code=decision.error_code,
+                    last_error_message=f"Rate limited — auto-resume scheduled at {resume_at.isoformat()}",
+                    clear_cancel=True,
+                    event_type="job.auto_resume.scheduled",
+                    event_detail={
+                        "reason": "auto_resume_on_quota",
+                        "resume_at": resume_at.isoformat(),
+                        "original_reason": decision.reason,
+                    },
+                    metadata_updates={"auto_resume": True, "resume_hint": "quota_reset"},
+                )
+                self._emit_stream_event(
+                    job,
+                    event_type="info",
+                    phase="waiting",
+                    message=f"Rate limited. Auto-resume scheduled for quota reset.",
+                    metadata={"resume_at": resume_at.isoformat()},
+                )
+                return
             self.repository.update_job_status(
                 job.id,
                 target_status=JobStatus.FAILED,
@@ -2263,6 +2299,54 @@ class OrchestratorService:
             },
             metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
         )
+
+    def _check_auto_resume_on_quota(self, job: Job, decision: Any) -> Optional[datetime]:
+        """If the project has auto-resume enabled and this was a rate limit failure,
+        return a datetime to schedule the retry at based on rate limit reset headers."""
+        project_id = job.metadata.get("project_id")
+        if not project_id:
+            return None
+        reason = getattr(decision, "reason", "")
+        error_code = getattr(decision, "error_code", "") or ""
+        headers = getattr(decision, "headers", {}) or {}
+        is_rate_limited = (
+            "rate_limit" in reason
+            or "429" in error_code
+            or "rate_limited" in error_code.lower()
+        )
+        if not is_rate_limited:
+            return None
+        try:
+            project = self.repository.get_saved_project(project_id)
+        except KeyError:
+            return None
+        if not project.auto_resume_on_quota:
+            return None
+        now = utcnow()
+        reset_at = self._parse_quota_reset_time(headers, now)
+        if reset_at is not None:
+            return reset_at
+        # Default: retry in 60 seconds if no reset header found
+        return now + timedelta(seconds=60)
+
+    def _parse_quota_reset_time(self, headers: Dict[str, Any], now: datetime) -> Optional[datetime]:
+        """Extract reset time from Anthropic rate limit headers."""
+        for key, value in headers.items():
+            lower = key.lower()
+            if "ratelimit" in lower and "reset" in lower:
+                parsed = parse_retry_after(str(value), now)
+                if parsed is not None:
+                    return now + timedelta(seconds=parsed)
+        retry_after = None
+        for key, value in headers.items():
+            if key.lower() == "retry-after":
+                retry_after = str(value)
+                break
+        if retry_after:
+            parsed = parse_retry_after(retry_after, now)
+            if parsed is not None:
+                return now + timedelta(seconds=parsed)
+        return None
 
     def _followup_metadata(self, job: Job, result: BackendResult) -> tuple[Dict[str, Any], Sequence[str]]:
         if result.followup_reason == "max_tokens":

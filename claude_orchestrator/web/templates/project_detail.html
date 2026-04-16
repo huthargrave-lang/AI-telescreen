@@ -213,6 +213,64 @@
     </div>
   </details>
 
+  {# ── Usage ── #}
+  <details class="panel disclosure" style="margin-top: 14px;" id="usage-panel">
+    <summary class="section-summary disclosure-toggle">
+      <strong>Usage</strong>
+      <span class="meta">{{ usage.total_tokens_fmt }} tokens · {{ usage.run_count }} runs</span>
+    </summary>
+    <div class="summary-grid two" style="margin-top: 12px;">
+      <div>
+        <div class="meta">Token Totals</div>
+        <div class="value-block">
+          <div style="display: grid; gap: 6px; grid-template-columns: 1fr 1fr;">
+            <div>
+              <div class="meta" style="font-size: 0.76rem;">Input</div>
+              <div style="font-size: 1.1rem; font-weight: 600;">{{ usage.input_fmt }}</div>
+            </div>
+            <div>
+              <div class="meta" style="font-size: 0.76rem;">Output</div>
+              <div style="font-size: 1.1rem; font-weight: 600;">{{ usage.output_fmt }}</div>
+            </div>
+            <div>
+              <div class="meta" style="font-size: 0.76rem;">Cache Read</div>
+              <div>{{ usage.cache_read_fmt }}</div>
+            </div>
+            <div>
+              <div class="meta" style="font-size: 0.76rem;">Cache Write</div>
+              <div>{{ usage.cache_create_fmt }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="meta">Rate Limits</div>
+        <div class="value-block">
+          {% if usage.has_quota %}
+            {% for label, entry in usage.quota.items() %}
+              <div style="margin-bottom: 8px;">
+                <div class="meta" style="font-size: 0.76rem;">{{ label }}</div>
+                {% if entry.limit %}
+                  <div style="margin-top: 3px; height: 6px; border-radius: 3px; background: rgba(29,29,26,0.08); overflow: hidden;">
+                    <div style="height: 100%; width: {{ entry.pct }}%; border-radius: 3px; background: {{ 'var(--ok)' if entry.pct > 30 else ('var(--warn)' if entry.pct > 10 else 'var(--danger)') }};"></div>
+                  </div>
+                  <div class="meta" style="font-size: 0.78rem; margin-top: 2px;">{{ entry.remaining_fmt }} / {{ entry.limit_fmt }} remaining ({{ entry.pct }}%)</div>
+                {% else %}
+                  <div>{{ entry.remaining_fmt }} remaining</div>
+                {% endif %}
+                {% if entry.reset %}
+                  <div class="meta" style="font-size: 0.76rem;">Resets: {{ entry.reset }}</div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="meta">Rate limit data appears after the first API call.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </details>
+
   {# ── History ── #}
   <details class="panel disclosure" style="margin-top: 14px;" id="history-panel">
     <summary class="section-summary disclosure-toggle">
