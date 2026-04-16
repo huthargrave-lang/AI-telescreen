@@ -403,9 +403,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         }
 
     def serialize_project_manager_session(session) -> dict:
-        badges = [
-            {"label": session.autonomy_mode.title(), "class_name": ""},
-        ]
+        badges: list[dict[str, str]] = []
         state_badges: list[dict[str, str]] = []
         if session.waiting_on_worker:
             state_badges.append({"label": "waiting on worker", "class_name": "status-pill status-queued"})
@@ -1961,7 +1959,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         return _redirect_with_feedback(
             request,
             f"/projects/{project_id}",
-            notice="Operator feedback was recorded and the Project Manager refreshed its recommendation.",
+            notice="Feedback recorded.",
         )
 
     @app.post("/projects/{project_id}/manager/save-advisory")

@@ -36,19 +36,11 @@
         </div>
       {% endif %}
 
-      {# ── Manager status line ── #}
-      <div style="margin-bottom: 12px;">
-        <strong>{{ project_manager.workspace.manager.headline }}</strong>
-        {% if project_manager.workspace.manager.detail %}
-          <div class="meta" style="margin-top: 2px;">{{ project_manager.workspace.manager.detail }}</div>
-        {% endif %}
-      </div>
-
-      {# ── Action needed card (blocked state) ── #}
-      {% if project_manager.session.workflow_state == "blocked_on_manual_test" %}
+      {# ── ACTION NEEDED: single clear card with approve/reject ── #}
+      {% if ws == "blocked_on_manual_test" %}
         <div class="action-card" style="margin-bottom: 14px;">
           <h3>Action needed</h3>
-          <div class="meta">The agent is paused. Verify the changes and record your result to continue.</div>
+          <div class="meta">Verify the changes, then approve or flag issues.</div>
           {% if project_manager.workspace.coding_agent.test_next.checklist_items %}
             <ol class="action-steps">
               {% for item in project_manager.workspace.coding_agent.test_next.checklist_items %}
@@ -56,32 +48,78 @@
               {% endfor %}
             </ol>
           {% endif %}
-          <div class="toolbar" style="margin-top: 10px;">
-            <a class="pill" href="#feedback-panel" onclick="document.getElementById('feedback-panel').open=true">Record result</a>
+          <div class="toolbar" style="margin-top: 12px;">
+            <form method="post" action="/projects/{{ project.id }}/feedback">
+              <input type="hidden" name="outcome" value="passed" />
+              <input type="hidden" name="severity" value="normal" />
+              <input type="hidden" name="notes" value="Approved. Looks good." />
+              <button type="submit" class="approve-btn">Approve</button>
+            </form>
+            <form method="post" action="/projects/{{ project.id }}/feedback">
+              <input type="hidden" name="outcome" value="failed" />
+              <input type="hidden" name="severity" value="normal" />
+              <input type="hidden" name="notes" value="Needs work." />
+              <input type="hidden" name="requires_followup" value="on" />
+              <button type="submit" class="reject-btn">Needs work</button>
+            </form>
+            <a class="pill" href="#feedback-panel" onclick="document.getElementById('feedback-panel').open=true">Detailed feedback</a>
           </div>
         </div>
-      {% endif %}
 
-      {# ── Primary action buttons ── #}
-      {% if project_manager.workspace.manager.primary_action.label and project_manager.session.workflow_state != "blocked_on_manual_test" %}
-        <div class="toolbar" style="margin-bottom: 14px;">
-          {% if project_manager.workspace.manager.primary_action.kind == "launch_draft" %}
-            <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
-              <button type="submit">{{ project_manager.workspace.manager.primary_action.label }}</button>
-            </form>
-          {% elif project_manager.workspace.manager.primary_action.kind == "continue" %}
-            <form method="post" action="/projects/{{ project.id }}/manager/continue">
-              <button type="submit">{{ project_manager.workspace.manager.primary_action.label }}</button>
-            </form>
-          {% elif project_manager.workspace.manager.primary_action.kind == "retry_job" and project_manager.workspace.coding_agent.active_job %}
-            <form method="post" action="/jobs/{{ project_manager.workspace.coding_agent.active_job.id }}/retry?next=/projects/{{ project.id }}">
-              <button type="submit">{{ project_manager.workspace.manager.primary_action.label }}</button>
-            </form>
+      {# ── READY TO CONTINUE: prominent approve/continue ── #}
+      {% elif ws == "awaiting_continue_decision" and project_manager.workspace.manager.primary_action.kind == "continue" %}
+        <div class="action-card" style="margin-bottom: 14px; border-color: var(--ok); background: rgba(15, 118, 110, 0.04);">
+          <h3>{{ project_manager.workspace.manager.headline }}</h3>
+          {% if project_manager.workspace.manager.detail %}
+            <div class="meta" style="margin-top: 2px;">{{ project_manager.workspace.manager.detail }}</div>
           {% endif %}
-          {% if project_manager.response.draft_task %}
-            <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit draft</a>
+          <div class="toolbar" style="margin-top: 12px;">
+            <form method="post" action="/projects/{{ project.id }}/manager/continue">
+              <button type="submit" class="approve-btn">Continue</button>
+            </form>
+            {% if project_manager.response.draft_task %}
+              <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit draft</a>
+            {% endif %}
+            <a class="pill" href="#project-manager-composer">Send feedback instead</a>
+          </div>
+        </div>
+
+      {# ── AWAITING CONFIRMATION: launch button ── #}
+      {% elif ws == "awaiting_confirmation" or (project_manager.workspace.manager.primary_action.kind == "launch_draft") %}
+        <div class="action-card" style="margin-bottom: 14px; border-color: var(--accent); background: rgba(0, 95, 115, 0.04);">
+          <h3>{{ project_manager.workspace.manager.headline }}</h3>
+          {% if project_manager.workspace.manager.detail %}
+            <div class="meta" style="margin-top: 2px;">{{ project_manager.workspace.manager.detail }}</div>
+          {% endif %}
+          <div class="toolbar" style="margin-top: 12px;">
+            {% if project_manager.workspace.manager.primary_action.kind == "launch_draft" %}
+              <form method="post" action="/projects/{{ project.id }}/manager/launch-draft">
+                <button type="submit">Run</button>
+              </form>
+            {% endif %}
+            {% if project_manager.response.draft_task %}
+              <a class="pill" href="/jobs/new?project_id={{ project.id }}&manager_draft=1">Edit draft</a>
+            {% endif %}
+          </div>
+        </div>
+
+      {# ── DEFAULT: headline + action buttons ── #}
+      {% else %}
+        <div style="margin-bottom: 12px;">
+          <strong>{{ project_manager.workspace.manager.headline }}</strong>
+          {% if project_manager.workspace.manager.detail %}
+            <div class="meta" style="margin-top: 2px;">{{ project_manager.workspace.manager.detail }}</div>
           {% endif %}
         </div>
+        {% if project_manager.workspace.manager.primary_action.label %}
+          <div class="toolbar" style="margin-bottom: 14px;">
+            {% if project_manager.workspace.manager.primary_action.kind == "retry_job" and project_manager.workspace.coding_agent.active_job %}
+              <form method="post" action="/jobs/{{ project_manager.workspace.coding_agent.active_job.id }}/retry?next=/projects/{{ project.id }}">
+                <button type="submit">{{ project_manager.workspace.manager.primary_action.label }}</button>
+              </form>
+            {% endif %}
+          </div>
+        {% endif %}
       {% endif %}
 
       {# ── Unified summary: agent result + changes ── #}
@@ -126,7 +164,6 @@
         <details class="disclosure" style="margin-top: 8px;">
           <summary class="pill disclosure-toggle" style="display: inline-flex;">Details</summary>
 
-          {# Session ledger #}
           {% if project_manager.workspace.manager.session_ledger.objective %}
             <div style="margin-top: 10px;">
               <div class="meta">Objective</div>
@@ -150,7 +187,6 @@
             </div>
           {% endif %}
 
-          {# Timeline #}
           {% if project_manager.workspace.timeline %}
             <div style="margin-top: 10px;">
               <div class="meta">Activity</div>
@@ -167,16 +203,12 @@
             </div>
           {% endif %}
 
-          {# Full manager response details #}
           {% if project_manager.response %}
             <div class="pill-row" style="margin-top: 10px;">
               <span class="pill small">{{ project_manager.response.phase }}</span>
               <span class="pill small">{{ project_manager.response.decision }}</span>
               <span class="pill small">{{ project_manager.response.confidence }}</span>
             </div>
-            {% if project_manager.response.reason %}
-              <div class="meta" style="margin-top: 4px;">{{ project_manager.response.reason }}</div>
-            {% endif %}
             {% if project_manager.response.draft_task %}
               <div style="margin-top: 8px;">
                 <div class="meta">Draft prompt</div>
