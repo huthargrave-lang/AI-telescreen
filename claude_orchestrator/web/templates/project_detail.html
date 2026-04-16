@@ -166,6 +166,19 @@
         </div>
       </div>
       <div>
+        <div class="meta">Model</div>
+        <div class="value-block">
+          <form method="post" action="/projects/{{ project.id }}/model" class="stack-compact">
+            <select name="default_model">
+              {% for model_option in available_models %}
+                <option value="{{ model_option.value }}" {% if (project.default_model or "") == model_option.value %}selected{% endif %}>{{ model_option.label }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="secondary">Update</button>
+          </form>
+        </div>
+      </div>
+      <div>
         <div class="meta">Defaults</div>
         <div class="value-block">
           <div class="pill-row">
