@@ -36,6 +36,14 @@
         </select>
       </label>
       <label>
+        <span class="meta">Model</span><br />
+        <select name="default_model">
+          {% for model_option in available_models %}
+            <option value="{{ model_option.value }}" {% if form_values.default_model == model_option.value %}selected{% endif %}>{{ model_option.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
         <span class="meta">Provider</span><br />
         <select name="default_provider">
           <option value="">Auto</option>
@@ -49,11 +57,15 @@
         <input type="text" name="default_base_branch" value="{{ form_values.default_base_branch }}" />
       </label>
       <label>
-        <span class="meta">Workspace</span><br />
-        <div style="margin-top: 10px;">
+        <span class="meta">Options</span><br />
+        <div style="margin-top: 10px; display: grid; gap: 8px;">
           <label>
             <input type="checkbox" name="default_use_git_worktree" {% if form_values.default_use_git_worktree %}checked{% endif %} />
             Use git worktree
+          </label>
+          <label>
+            <input type="checkbox" name="auto_resume_on_quota" {% if form_values.auto_resume_on_quota %}checked{% endif %} />
+            Auto-resume on quota reset
           </label>
         </div>
       </label>

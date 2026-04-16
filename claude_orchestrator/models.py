@@ -194,6 +194,8 @@ class SavedProject:
     updated_at: datetime
     autonomy_mode: str = "minimal"
     initial_context: Optional[str] = None
+    default_model: Optional[str] = None
+    auto_resume_on_quota: bool = False
 
 
 @dataclass

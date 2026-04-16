@@ -305,6 +305,8 @@ class JobRepository:
         notes: Optional[str],
         autonomy_mode: str = "minimal",
         initial_context: Optional[str] = None,
+        default_model: Optional[str] = None,
+        auto_resume_on_quota: bool = False,
     ) -> SavedProject:
         project_id = str(uuid.uuid4())
         now = utcnow()
@@ -322,9 +324,11 @@ class JobRepository:
                     notes,
                     autonomy_mode,
                     initial_context,
+                    default_model,
+                    auto_resume_on_quota,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     project_id,
@@ -337,6 +341,8 @@ class JobRepository:
                     notes,
                     autonomy_mode,
                     initial_context,
+                    default_model,
+                    1 if auto_resume_on_quota else 0,
                     to_iso8601(now),
                     to_iso8601(now),
                 ),
@@ -376,6 +382,8 @@ class JobRepository:
         notes: Optional[str],
         autonomy_mode: str = "minimal",
         initial_context: Optional[str] = None,
+        default_model: Optional[str] = None,
+        auto_resume_on_quota: bool = False,
     ) -> SavedProject:
         now = utcnow()
         with self.db.connect() as connection:
@@ -392,6 +400,8 @@ class JobRepository:
                     notes = ?,
                     autonomy_mode = ?,
                     initial_context = ?,
+                    default_model = ?,
+                    auto_resume_on_quota = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -405,6 +415,8 @@ class JobRepository:
                     notes,
                     autonomy_mode,
                     initial_context,
+                    default_model,
+                    1 if auto_resume_on_quota else 0,
                     to_iso8601(now),
                     project_id,
                 ),
@@ -425,6 +437,49 @@ class JobRepository:
                 (project_id, limit),
             ).fetchall()
         return [self._row_to_job(row) for row in rows]
+
+    def get_project_usage_summary(self, project_id: str) -> Dict[str, Any]:
+        """Aggregate token usage across all runs for a project."""
+        with self.db.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT jr.usage_json, jr.headers_json, jr.provider, jr.backend,
+                       jr.started_at, jr.ended_at
+                FROM job_runs jr
+                JOIN jobs j ON jr.job_id = j.id
+                WHERE j.project_id = ?
+                ORDER BY jr.started_at DESC
+                """,
+                (project_id,),
+            ).fetchall()
+
+        totals: Dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
+        run_count = len(rows)
+        latest_headers: Dict[str, Any] = {}
+
+        for row in rows:
+            usage = _loads(row["usage_json"])
+            for key in totals:
+                totals[key] += int(usage.get(key, 0))
+            if not latest_headers:
+                latest_headers = _loads(row["headers_json"])
+
+        rate_limits: Dict[str, Any] = {}
+        for key, value in latest_headers.items():
+            lower = key.lower()
+            if "ratelimit" in lower or "rate-limit" in lower:
+                rate_limits[key] = value
+
+        return {
+            "totals": totals,
+            "run_count": run_count,
+            "rate_limits": rate_limits,
+        }
 
     def get_project_manager_state(self, project_id: str) -> Optional[ProjectManagerState]:
         with self.db.connect() as connection:
@@ -1617,8 +1672,18 @@ class JobRepository:
 
     def _row_to_saved_project(self, row: Any) -> SavedProject:
         initial_context = None
+        default_model = None
+        auto_resume_on_quota = False
         try:
             initial_context = row["initial_context"]
+        except (IndexError, KeyError):
+            pass
+        try:
+            default_model = row["default_model"]
+        except (IndexError, KeyError):
+            pass
+        try:
+            auto_resume_on_quota = bool(row["auto_resume_on_quota"])
         except (IndexError, KeyError):
             pass
         return SavedProject(
@@ -1634,6 +1699,8 @@ class JobRepository:
             updated_at=from_iso8601(row["updated_at"]) or utcnow(),
             autonomy_mode=row["autonomy_mode"] or "minimal",
             initial_context=initial_context,
+            default_model=default_model,
+            auto_resume_on_quota=auto_resume_on_quota,
         )
 
     def _row_to_project_manager_state(self, row: Any) -> ProjectManagerState:

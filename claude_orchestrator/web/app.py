@@ -74,6 +74,15 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             | {infer_provider(name) for name in orchestrator.backends.keys()}
         )
 
+    def _available_models() -> list[dict[str, str]]:
+        return [
+            {"value": "", "label": "Default (from config)"},
+            {"value": "claude-opus-4-20250514", "label": "Claude Opus 4"},
+            {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4"},
+            {"value": "claude-sonnet-4-5-20241022", "label": "Claude 3.5 Sonnet"},
+            {"value": "claude-haiku-3-5-20241022", "label": "Claude 3.5 Haiku"},
+        ]
+
     def serialize_integration(summary, backend_name: str) -> dict:
         backend_support = orchestrator.describe_backend_integrations(
             backend_name,
@@ -256,6 +265,11 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             badges.append({"label": f"base {project.default_base_branch}", "title": "Default base branch"})
         if project.default_use_git_worktree:
             badges.append({"label": "worktree", "title": "Uses git worktree by default"})
+        if project.default_model:
+            short_model = project.default_model.split("-20")[0] if "-20" in project.default_model else project.default_model
+            badges.append({"label": short_model, "title": f"Model: {project.default_model}"})
+        if project.auto_resume_on_quota:
+            badges.append({"label": "auto-resume", "title": "Auto-resume when rate limit quota resets"})
         return {
             "badges": badges,
             "fallback": "Uses app defaults" if not badges else None,
@@ -1117,6 +1131,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "autonomy_mode": "minimal",
             "notes": "",
             "initial_context": "",
+            "default_model": "",
+            "auto_resume_on_quota": False,
         }
         if form_values:
             values.update(form_values)
@@ -1126,6 +1142,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "available_backends": _available_backends(),
             "coding_agent_options": _project_coding_agent_options(),
             "available_providers": _available_providers(),
+            "available_models": _available_models(),
             "error": error,
             "project": project,
             "page_title": "Edit Project" if project else "New Project",
@@ -1299,6 +1316,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
         project = workspace_view["project"]
         integration_summary = orchestrator.get_project_integration_summary(project_id)
         project_manager = workspace_view["project_manager"]
+        usage_summary = _serialize_usage_summary(project_id)
         return {
             "request": request,
             "project": project,
@@ -1316,6 +1334,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "feedback_form_values": {**_default_feedback_form_values(), **(feedback_form_values or {})},
             "feedback_error": feedback_error,
             "coding_agent_options": _coding_agent_options(),
+            "usage": usage_summary,
         }
 
     def _job_form_values_from_job(job_id: str) -> dict:
@@ -1417,6 +1436,58 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "status": summary.status(),
             "labels": summary.status_labels(),
             "summary": summary.to_dict(),
+        }
+
+    def _serialize_usage_summary(project_id: str) -> dict:
+        raw = orchestrator.repository.get_project_usage_summary(project_id)
+        totals = raw["totals"]
+        total_tokens = totals["input_tokens"] + totals["output_tokens"]
+
+        def _fmt(n: int) -> str:
+            if n >= 1_000_000:
+                return f"{n / 1_000_000:.1f}M"
+            if n >= 1_000:
+                return f"{n / 1_000:.1f}k"
+            return str(n)
+
+        rate_limits = raw.get("rate_limits", {})
+        quota_info: dict = {}
+        for key, value in rate_limits.items():
+            lower = key.lower()
+            if "remaining" in lower and "token" in lower:
+                try:
+                    remaining = int(value)
+                except (ValueError, TypeError):
+                    continue
+                limit_key = key.replace("remaining", "limit")
+                limit_val = rate_limits.get(limit_key)
+                try:
+                    limit_int = int(limit_val) if limit_val else None
+                except (ValueError, TypeError):
+                    limit_int = None
+                reset_key = key.replace("remaining", "reset")
+                reset_val = rate_limits.get(reset_key)
+                label = "output tokens" if "output" in lower else "input tokens" if "input" in lower else "tokens"
+                entry = {"remaining": remaining, "remaining_fmt": _fmt(remaining), "label": label}
+                if limit_int:
+                    entry["limit"] = limit_int
+                    entry["limit_fmt"] = _fmt(limit_int)
+                    entry["pct"] = round(100 * remaining / limit_int) if limit_int > 0 else 0
+                if reset_val:
+                    entry["reset"] = str(reset_val)
+                quota_info[label] = entry
+
+        return {
+            "totals": totals,
+            "total_tokens": total_tokens,
+            "total_tokens_fmt": _fmt(total_tokens),
+            "input_fmt": _fmt(totals["input_tokens"]),
+            "output_fmt": _fmt(totals["output_tokens"]),
+            "cache_read_fmt": _fmt(totals["cache_read_input_tokens"]),
+            "cache_create_fmt": _fmt(totals["cache_creation_input_tokens"]),
+            "run_count": raw["run_count"],
+            "quota": quota_info,
+            "has_quota": bool(quota_info),
         }
 
     @app.get("/", response_class=HTMLResponse)
@@ -1709,6 +1780,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "autonomy_mode": str(form.get("autonomy_mode") or "minimal"),
             "notes": str(form.get("notes") or ""),
             "initial_context": str(form.get("initial_context") or ""),
+            "default_model": str(form.get("default_model") or ""),
+            "auto_resume_on_quota": _coerce_checkbox(form.get("auto_resume_on_quota")),
         }
         try:
             if not form_values["name"].strip():
@@ -1729,6 +1802,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 notes=form_values["notes"].strip() or None,
                 autonomy_mode=form_values["autonomy_mode"] or "minimal",
                 initial_context=form_values["initial_context"].strip() or None,
+                default_model=form_values["default_model"].strip() or None,
+                auto_resume_on_quota=form_values["auto_resume_on_quota"],
             )
         except Exception as exc:
             return templates.TemplateResponse(
@@ -1758,6 +1833,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     "autonomy_mode": project.autonomy_mode,
                     "notes": project.notes or "",
                     "initial_context": project.initial_context or "",
+                    "default_model": project.default_model or "",
+                    "auto_resume_on_quota": project.auto_resume_on_quota,
                 },
             ),
         )
@@ -1777,6 +1854,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "autonomy_mode": str(form.get("autonomy_mode") or "minimal"),
             "notes": str(form.get("notes") or ""),
             "initial_context": str(form.get("initial_context") or ""),
+            "default_model": str(form.get("default_model") or ""),
+            "auto_resume_on_quota": _coerce_checkbox(form.get("auto_resume_on_quota")),
         }
         try:
             if not form_values["name"].strip():
@@ -1798,6 +1877,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 notes=form_values["notes"].strip() or None,
                 autonomy_mode=form_values["autonomy_mode"] or "minimal",
                 initial_context=form_values["initial_context"].strip() or None,
+                default_model=form_values["default_model"].strip() or None,
+                auto_resume_on_quota=form_values["auto_resume_on_quota"],
             )
         except Exception as exc:
             return templates.TemplateResponse(
