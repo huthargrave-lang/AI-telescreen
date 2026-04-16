@@ -418,6 +418,12 @@
       const regionId = "project-workspace-live-region";
       let pollTimer = null;
       let inFlight = false;
+      let suppressUntil = 0;
+
+      const suppress = (ms = 5000) => {
+        suppressUntil = Date.now() + ms;
+        window.clearTimeout(pollTimer);
+      };
 
       const scheduleNextPoll = () => {
         window.clearTimeout(pollTimer);
@@ -430,6 +436,10 @@
       };
 
       const refreshWorkspace = async () => {
+        if (Date.now() < suppressUntil) {
+          scheduleNextPoll();
+          return;
+        }
         const region = document.getElementById(regionId);
         if (!region || inFlight) {
           scheduleNextPoll();
@@ -458,6 +468,7 @@
             const nextRegion = template.content.firstElementChild;
             if (nextRegion) {
               region.replaceWith(nextRegion);
+              attachFormListeners();
             }
           }
         } catch (error) {
@@ -468,8 +479,23 @@
         }
       };
 
+      const attachFormListeners = () => {
+        const region = document.getElementById(regionId);
+        if (!region) return;
+        region.querySelectorAll("form").forEach(form => {
+          form.addEventListener("submit", () => suppress(8000), { once: true });
+        });
+        region.querySelectorAll("button[type=submit], input[type=submit]").forEach(btn => {
+          btn.addEventListener("click", () => suppress(8000), { once: true });
+        });
+      };
+
       document.addEventListener("visibilitychange", scheduleNextPoll);
-      window.addEventListener("pageshow", scheduleNextPoll);
+      window.addEventListener("pageshow", () => {
+        attachFormListeners();
+        scheduleNextPoll();
+      });
+      attachFormListeners();
       scheduleNextPoll();
     })();
   </script>
