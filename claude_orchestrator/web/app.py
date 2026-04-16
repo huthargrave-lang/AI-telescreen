@@ -1335,6 +1335,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "feedback_error": feedback_error,
             "coding_agent_options": _coding_agent_options(),
             "usage": usage_summary,
+            "available_models": _available_models(),
         }
 
     def _job_form_values_from_job(job_id: str) -> dict:
@@ -2069,6 +2070,21 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             request,
             f"/projects/{project_id}",
             notice="Updated the Project Manager autonomy mode for this project.",
+        )
+
+    @app.post("/projects/{project_id}/model")
+    async def update_project_model(request: Request, project_id: str):
+        form = await _parse_form_values(request)
+        model_value = str(form.get("default_model") or "").strip() or None
+        try:
+            orchestrator.set_project_default_model(project_id, model_value)
+        except Exception as exc:
+            return _redirect_with_feedback(request, f"/projects/{project_id}", error=str(exc))
+        label = model_value.split("-20")[0] if model_value and "-20" in model_value else (model_value or "default")
+        return _redirect_with_feedback(
+            request,
+            f"/projects/{project_id}",
+            notice=f"Model set to {label}.",
         )
 
     @app.post("/projects/{project_id}/manager/continue")

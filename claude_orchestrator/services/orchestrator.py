@@ -468,6 +468,22 @@ class OrchestratorService:
             auto_resume_on_quota=project.auto_resume_on_quota,
         )
 
+    def set_project_default_model(self, project_id: str, default_model: Optional[str]) -> SavedProject:
+        project = self.repository.get_saved_project(project_id)
+        return self.update_saved_project(
+            project_id,
+            name=project.name,
+            repo_path=project.repo_path,
+            default_backend=project.default_backend,
+            default_provider=project.default_provider,
+            default_base_branch=project.default_base_branch,
+            default_use_git_worktree=project.default_use_git_worktree,
+            notes=project.notes,
+            autonomy_mode=project.autonomy_mode,
+            default_model=default_model,
+            auto_resume_on_quota=project.auto_resume_on_quota,
+        )
+
     def launch_job_from_project(
         self,
         project_id: str,
