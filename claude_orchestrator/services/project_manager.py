@@ -1511,7 +1511,7 @@ class ProjectManagerService:
             return backend_preference
         if baseline.draft_task and baseline.draft_task.backend:
             return baseline.draft_task.backend
-        return str(latest_summary.get("backend") or project.default_backend or "messages_api")
+        return str(latest_summary.get("backend") or project.default_backend or "claude_code_cli")
 
     def _preferred_provider(
         self,
@@ -1755,7 +1755,7 @@ class ProjectManagerService:
         return self._normalize_draft_task(
             ProjectManagerDraftTask(
                 prompt=prompt,
-                backend=str(latest_summary.get("backend") or project.default_backend or "messages_api"),
+                backend=str(latest_summary.get("backend") or project.default_backend or "claude_code_cli"),
                 task_type=str(latest_summary.get("task_type") or "code"),
                 priority=priority,
                 use_git_worktree=bool(project.default_use_git_worktree),
@@ -1849,7 +1849,7 @@ class ProjectManagerService:
         return self._normalize_draft_task(
             ProjectManagerDraftTask(
                 prompt=prompt,
-                backend=str(summary.get("backend") or project.default_backend or "messages_api"),
+                backend=str(summary.get("backend") or project.default_backend or "claude_code_cli"),
                 task_type=str(summary.get("task_type") or "code"),
                 priority=0,
                 use_git_worktree=bool(project.default_use_git_worktree),
@@ -2213,7 +2213,7 @@ class ProjectManagerService:
         )
         return ProjectManagerDraftTask(
             prompt=self._truncate(draft_task.prompt, 1200, preserve_newlines=True) or "",
-            backend=draft_task.backend or "messages_api",
+            backend=draft_task.backend or "claude_code_cli",
             task_type=draft_task.task_type or "code",
             priority=int(draft_task.priority),
             use_git_worktree=bool(draft_task.use_git_worktree),

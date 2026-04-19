@@ -77,10 +77,11 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
     def _available_models() -> list[dict[str, str]]:
         return [
             {"value": "", "label": "Default (from config)"},
-            {"value": "claude-opus-4-20250514", "label": "Claude Opus 4"},
-            {"value": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4"},
-            {"value": "claude-sonnet-4-5-20241022", "label": "Claude 3.5 Sonnet"},
-            {"value": "claude-haiku-3-5-20241022", "label": "Claude 3.5 Haiku"},
+            {"value": "claude-opus-4-7", "label": "Claude Opus 4.7 (most capable, highest token use)"},
+            {"value": "claude-opus-4-6", "label": "Claude Opus 4.6 (capable, lower token use)"},
+            {"value": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (fast, balanced)"},
+            {"value": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
+            {"value": "claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fastest, cheapest)"},
         ]
 
     def serialize_integration(summary, backend_name: str) -> dict:

@@ -36,11 +36,14 @@ class ClaudeCodeCliBackend(BackendAdapter):
         prompt_file = workspace / "cli_prompt.txt"
         prompt_file.write_text(prompt, encoding="utf-8")
         await self._run_hooks("before", workspace, prompt_file)
-        command = self._build_command(workspace, prompt_file)
+        model = job.model or self.config.backends.claude_code_cli.default_model or self.config.model
+        command = self._build_command(workspace, prompt_file, model)
+        stdin_bytes = prompt.encode("utf-8") if self.config.backends.claude_code_cli.pipe_prompt_stdin else None
         returncode, stdout_text, stderr_text, stdout_truncated, stderr_truncated = await self._run_subprocess(
             command,
             cwd=workspace,
             timeout_seconds=self.config.backends.claude_code_cli.timeout_seconds,
+            stdin_bytes=stdin_bytes,
         )
         await self._run_hooks("after", workspace, prompt_file)
         if returncode != 0:
@@ -106,7 +109,7 @@ class ClaudeCodeCliBackend(BackendAdapter):
     def can_resume(self, job: Job, state: ConversationState) -> bool:
         return False
 
-    def _build_command(self, workspace: Path, prompt_file: Path) -> List[str]:
+    def _build_command(self, workspace: Path, prompt_file: Path, model: Optional[str] = None) -> List[str]:
         backend_config = self.config.backends.claude_code_cli
         if not backend_config.enabled:
             raise ConfigurationError("claude_code_cli backend is disabled in config.")
@@ -133,6 +136,7 @@ class ClaudeCodeCliBackend(BackendAdapter):
                     executable=resolved,
                     workspace=str(workspace),
                     prompt_file=str(prompt_file),
+                    model=model or backend_config.default_model or "",
                 )
             )
         command[0] = resolved
@@ -184,16 +188,24 @@ class ClaudeCodeCliBackend(BackendAdapter):
         *,
         cwd: Path,
         timeout_seconds: int,
+        stdin_bytes: Optional[bytes] = None,
     ) -> Tuple[int, str, str, bool, bool]:
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=str(cwd),
+                stdin=asyncio.subprocess.PIPE if stdin_bytes is not None else None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
         except FileNotFoundError as exc:
             raise ConfigurationError(str(exc)) from exc
+        if stdin_bytes is not None and process.stdin is not None:
+            try:
+                process.stdin.write(stdin_bytes)
+                await process.stdin.drain()
+            finally:
+                process.stdin.close()
         stdout_task = asyncio.create_task(
             self._read_stream_limited(process.stdout, self.config.backends.claude_code_cli.max_output_bytes)
         )

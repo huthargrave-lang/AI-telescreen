@@ -1,5 +1,5 @@
-default_backend = "messages_api"
-model = "claude-3-5-sonnet-latest"
+default_backend = "claude_code_cli"
+model = "claude-sonnet-4-6"
 workspace_root = "workspaces"
 
 [retry]
@@ -68,10 +68,12 @@ turn_limit = 20
 timeout_seconds = 900
 
 [backends.claude_code_cli]
-enabled = false
+enabled = true
 executable = "claude"
-command_template = []
-auth_check_command = []
+# Uses your local `claude` CLI authentication (your Claude subscription) — no API key required.
+# The prompt is piped to stdin; {model} is substituted per-project.
+command_template = ["{executable}", "--print", "--model", "{model}"]
+auth_check_command = ["{executable}", "--version"]
 hook_commands = []
 allow_hooks = false
 allowed_hook_executables = []
@@ -79,6 +81,8 @@ timeout_seconds = 1800
 hook_timeout_seconds = 30
 max_output_bytes = 1048576
 preview_characters = 500
+default_model = "claude-sonnet-4-6"
+pipe_prompt_stdin = true
 
 [backends.codex_cli]
 enabled = true
