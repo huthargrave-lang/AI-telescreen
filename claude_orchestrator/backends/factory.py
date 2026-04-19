@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 from typing import Dict
 
@@ -11,6 +12,8 @@ from .claude_code_cli import ClaudeCodeCliBackend
 from .codex_cli import CodexCliBackend
 from .message_batches import MessageBatchesBackend
 from .messages_api import MessagesApiBackend
+
+logger = logging.getLogger(__name__)
 
 
 def build_backend_registry(config: AppConfig) -> Dict[str, object]:
@@ -69,7 +72,11 @@ def validate_backend_config(config: AppConfig) -> None:
         if not config.backends.claude_code_cli.command_template:
             errors.append("claude_code_cli is enabled but command_template is empty.")
         if shutil.which(executable) is None:
-            errors.append(f"claude_code_cli executable {executable!r} is not on PATH.")
+            logger.warning(
+                "claude_code_cli executable %r is not on PATH. "
+                "Install it with: npm install -g @anthropic-ai/claude-code",
+                executable,
+            )
         if config.backends.claude_code_cli.hook_commands and not config.backends.claude_code_cli.allow_hooks:
             errors.append("claude_code_cli hook_commands are configured but allow_hooks is false.")
         if (
