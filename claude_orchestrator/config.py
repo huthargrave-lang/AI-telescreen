@@ -108,6 +108,8 @@ class ClaudeCodeCliBackendConfig:
     hook_timeout_seconds: int = 30
     max_output_bytes: int = 1048576
     preview_characters: int = 500
+    default_model: str = "claude-sonnet-4-6"
+    pipe_prompt_stdin: bool = False
 
 
 @dataclass

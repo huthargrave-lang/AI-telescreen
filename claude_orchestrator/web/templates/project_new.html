@@ -42,6 +42,7 @@
             <option value="{{ model_option.value }}" {% if form_values.default_model == model_option.value %}selected{% endif %}>{{ model_option.label }}</option>
           {% endfor %}
         </select>
+        <div class="meta" style="margin-top: 4px;">Uses your Claude subscription via the local <code>claude</code> CLI — no API key required. You can change this per project later.</div>
       </label>
       <label>
         <span class="meta">Provider</span><br />
