@@ -13,79 +13,87 @@
     {% if error %}
       <p style="color: var(--danger); margin-top: 0;">{{ error }}</p>
     {% endif %}
-    <form method="post" action="{{ form_action }}" class="form-grid">
+    <form method="post" action="{{ form_action }}" style="display: grid; gap: 20px;">
+      <div style="display: grid; gap: 20px; grid-template-columns: 1fr 1fr;">
+        <label>
+          <span class="meta">Name</span>
+          <input type="text" name="name" value="{{ form_values.name }}" required />
+        </label>
+        <label>
+          <span class="meta">Repo Path</span>
+          <input type="text" name="repo_path" value="{{ form_values.repo_path }}" required />
+        </label>
+      </div>
       <label>
-        <span class="meta">Name</span><br />
-        <input type="text" name="name" value="{{ form_values.name }}" required />
-      </label>
-      <label class="full">
-        <span class="meta">Repo Path</span><br />
-        <input type="text" name="repo_path" value="{{ form_values.repo_path }}" required />
-      </label>
-      <label class="full">
-        <span class="meta">Project Context</span><br />
+        <span class="meta">Project Context</span>
         <textarea name="initial_context" style="min-height: 100px;" placeholder="Describe the project goals, architecture, constraints, or any context the manager should know from the start.">{{ form_values.initial_context }}</textarea>
-        <div class="meta" style="margin-top: 4px;">This seeds the manager's memory. It will be automatically maintained and expanded as work progresses.</div>
+        <div class="meta" style="margin-top: 4px;">Seeds the manager's memory. Automatically maintained as work progresses.</div>
       </label>
-      <label>
-        <span class="meta">Default Agent</span><br />
-        <select name="default_backend">
-          {% for option in coding_agent_options %}
-            <option value="{{ option.value }}" {% if form_values.default_backend == option.value %}selected{% endif %}>{{ option.label }}{% if option.hint %} ({{ option.hint }}){% endif %}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span class="meta">Model</span><br />
-        <select name="default_model">
-          {% for model_option in available_models %}
-            <option value="{{ model_option.value }}" {% if form_values.default_model == model_option.value %}selected{% endif %}>{{ model_option.label }}</option>
-          {% endfor %}
-        </select>
-        <div class="meta" style="margin-top: 4px;">Uses your Claude subscription via the local <code>claude</code> CLI — no API key required. You can change this per project later.</div>
-      </label>
-      <label>
-        <span class="meta">Provider</span><br />
-        <select name="default_provider">
-          <option value="">Auto</option>
-          {% for provider_name in available_providers %}
-            <option value="{{ provider_name }}" {% if form_values.default_provider == provider_name %}selected{% endif %}>{{ provider_name }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span class="meta">Base Branch</span><br />
-        <input type="text" name="default_base_branch" value="{{ form_values.default_base_branch }}" />
-      </label>
-      <label>
-        <span class="meta">Options</span><br />
-        <div style="margin-top: 10px; display: grid; gap: 8px;">
+      <div style="display: grid; gap: 20px; grid-template-columns: 1fr 1fr;">
+        <label>
+          <span class="meta">Model</span>
+          <select name="default_model">
+            {% for model_option in available_models %}
+              <option value="{{ model_option.value }}" {% if form_values.default_model == model_option.value %}selected{% endif %}>{{ model_option.label }}</option>
+            {% endfor %}
+          </select>
+          <div class="meta" style="margin-top: 4px;">Uses your Claude subscription — no API key required.</div>
+        </label>
+        <label>
+          <span class="meta">Autonomy</span>
+          <select name="autonomy_mode">
+            <option value="minimal" {% if form_values.autonomy_mode == "minimal" %}selected{% endif %}>Minimal</option>
+            <option value="partial" {% if form_values.autonomy_mode == "partial" %}selected{% endif %}>Partial</option>
+            <option value="full" {% if form_values.autonomy_mode == "full" %}selected{% endif %}>Full</option>
+          </select>
+          <div class="meta" style="margin-top: 4px;">
+            Minimal asks before every task. Partial runs one step then asks. Full continues until a stop condition.
+          </div>
+        </label>
+      </div>
+      <details class="disclosure">
+        <summary class="pill small disclosure-toggle" style="display: inline-flex;">Advanced options</summary>
+        <div style="display: grid; gap: 20px; grid-template-columns: 1fr 1fr; margin-top: 12px;">
           <label>
-            <input type="checkbox" name="default_use_git_worktree" {% if form_values.default_use_git_worktree %}checked{% endif %} />
-            Use git worktree
+            <span class="meta">Agent</span>
+            <select name="default_backend">
+              {% for option in coding_agent_options %}
+                <option value="{{ option.value }}" {% if form_values.default_backend == option.value %}selected{% endif %}>{{ option.label }}{% if option.hint %} ({{ option.hint }}){% endif %}</option>
+              {% endfor %}
+            </select>
           </label>
           <label>
-            <input type="checkbox" name="auto_resume_on_quota" {% if form_values.auto_resume_on_quota %}checked{% endif %} />
-            Auto-resume on quota reset
+            <span class="meta">Base Branch</span>
+            <input type="text" name="default_base_branch" value="{{ form_values.default_base_branch }}" placeholder="main" />
+            <div class="meta" style="margin-top: 4px;">Branch to base work off of. Leave empty for <code>main</code>.</div>
+          </label>
+          <div style="display: grid; gap: 10px; align-content: start;">
+            <span class="meta">Options</span>
+            <label style="display: flex; gap: 6px; align-items: center;">
+              <input type="checkbox" name="default_use_git_worktree" {% if form_values.default_use_git_worktree %}checked{% endif %} style="width: auto;" />
+              Use git worktree
+            </label>
+            <label style="display: flex; gap: 6px; align-items: center;">
+              <input type="checkbox" name="auto_resume_on_quota" {% if form_values.auto_resume_on_quota %}checked{% endif %} style="width: auto;" />
+              Auto-resume on quota reset
+            </label>
+          </div>
+          <label>
+            <span class="meta">Provider</span>
+            <select name="default_provider">
+              <option value="">Auto</option>
+              {% for provider_name in available_providers %}
+                <option value="{{ provider_name }}" {% if form_values.default_provider == provider_name %}selected{% endif %}>{{ provider_name }}</option>
+              {% endfor %}
+            </select>
           </label>
         </div>
-      </label>
+      </details>
       <label>
-        <span class="meta">Autonomy</span><br />
-        <select name="autonomy_mode">
-          <option value="minimal" {% if form_values.autonomy_mode == "minimal" %}selected{% endif %}>Minimal</option>
-          <option value="partial" {% if form_values.autonomy_mode == "partial" %}selected{% endif %}>Partial</option>
-          <option value="full" {% if form_values.autonomy_mode == "full" %}selected{% endif %}>Full</option>
-        </select>
-        <div class="meta" style="margin-top: 4px;">
-          Minimal asks before every task. Partial runs one step then asks. Full continues until a stop condition.
-        </div>
+        <span class="meta">Notes</span>
+        <textarea name="notes" style="min-height: 80px;">{{ form_values.notes }}</textarea>
       </label>
-      <label class="full">
-        <span class="meta">Notes</span><br />
-        <textarea name="notes">{{ form_values.notes }}</textarea>
-      </label>
-      <div class="full toolbar">
+      <div class="toolbar">
         <button type="submit">{{ submit_label }}</button>
         <a class="pill" href="{{ cancel_href }}">Cancel</a>
       </div>

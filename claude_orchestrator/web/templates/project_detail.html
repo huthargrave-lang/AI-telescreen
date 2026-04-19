@@ -23,9 +23,9 @@
       </div>
       <details class="disclosure" style="margin-top: 8px;">
         <summary class="pill small disclosure-toggle" style="display: inline-flex;">Options</summary>
-        <div class="form-grid" style="margin-top: 8px;">
+        <div style="display: grid; gap: 16px; grid-template-columns: auto 1fr auto; margin-top: 10px; align-items: start;">
           <label>
-            <span class="meta">Urgency</span><br />
+            <span class="meta">Urgency</span>
             <select name="urgency">
               {% for option in ["low", "normal", "high", "critical"] %}
                 <option value="{{ option }}" {% if manager_form_values.urgency == option %}selected{% endif %}>{{ option }}</option>
@@ -33,7 +33,7 @@
             </select>
           </label>
           <label>
-            <span class="meta">Agent</span><br />
+            <span class="meta">Agent</span>
             <select name="coding_agent">
               {% for option in coding_agent_options %}
                 <option value="{{ option.value }}" {% if manager_form_values.coding_agent == option.value %}selected{% endif %}>{{ option.label }}{% if option.hint %} ({{ option.hint }}){% endif %}</option>
@@ -41,7 +41,7 @@
             </select>
           </label>
           <label>
-            <span class="meta">Mode</span><br />
+            <span class="meta">Mode</span>
             <select name="execution_mode">
               <option value="" {% if not manager_form_values.execution_mode %}selected{% endif %}>Auto</option>
               {% for mode in ["read_only", "safe_changes", "coding_pass"] %}
@@ -138,38 +138,25 @@
       <strong>Settings</strong>
       <span class="meta">autonomy, context, defaults</span>
     </summary>
-    <div class="summary-grid two" style="margin-top: 12px;">
-      <div>
-        <div class="meta">Repo</div>
-        <div class="value-block path" title="{{ project.repo_path }}">{{ project.repo_path }}</div>
-      </div>
-      <div>
-        <div class="meta">Autonomy</div>
-        <div class="value-block">
-          <form method="post" action="/projects/{{ project.id }}/autonomy" class="stack-compact">
-            <select name="autonomy_mode">
+    <div style="margin-top: 12px;">
+      <div class="meta" style="margin-bottom: 4px;">Repo</div>
+      <div class="value-block path" title="{{ project.repo_path }}" style="margin-bottom: 16px;">{{ project.repo_path }}</div>
+      <div style="display: grid; gap: 16px; grid-template-columns: 1fr 1fr;">
+        <div>
+          <div class="meta">Autonomy</div>
+          <form method="post" action="/projects/{{ project.id }}/autonomy" style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+            <select name="autonomy_mode" style="flex: 1;">
               {% for option in ["minimal", "partial", "full"] %}
                 <option value="{{ option }}" {% if project_display.autonomy_mode == option %}selected{% endif %}>{{ option | title }}</option>
               {% endfor %}
             </select>
-            <div class="meta">
-              {% if project_display.autonomy_mode == "minimal" %}
-                Asks before every task.
-              {% elif project_display.autonomy_mode == "partial" %}
-                Runs one step, then asks.
-              {% else %}
-                Continues until a stop condition.
-              {% endif %}
-            </div>
             <button type="submit" class="secondary">Update</button>
           </form>
         </div>
-      </div>
-      <div>
-        <div class="meta">Model</div>
-        <div class="value-block">
-          <form method="post" action="/projects/{{ project.id }}/model" class="stack-compact">
-            <select name="default_model">
+        <div>
+          <div class="meta">Model</div>
+          <form method="post" action="/projects/{{ project.id }}/model" style="display: flex; gap: 8px; align-items: center; margin-top: 4px;">
+            <select name="default_model" style="flex: 1;">
               {% for model_option in available_models %}
                 <option value="{{ model_option.value }}" {% if (project.default_model or "") == model_option.value %}selected{% endif %}>{{ model_option.label }}</option>
               {% endfor %}
@@ -178,22 +165,20 @@
           </form>
         </div>
       </div>
-      <div>
+      <div style="margin-top: 16px;">
         <div class="meta">Defaults</div>
-        <div class="value-block">
-          <div class="pill-row">
-            {% for badge in project_display.defaults.badges %}
-              <span class="pill small" title="{{ badge.title }}">{{ badge.label }}</span>
-            {% endfor %}
-            {% if not project_display.defaults.badges %}
-              <span class="pill small">App defaults</span>
-            {% endif %}
-          </div>
+        <div class="pill-row" style="margin-top: 4px;">
+          {% for badge in project_display.defaults.badges %}
+            <span class="pill small" title="{{ badge.title }}">{{ badge.label }}</span>
+          {% endfor %}
+          {% if not project_display.defaults.badges %}
+            <span class="pill small">App defaults</span>
+          {% endif %}
         </div>
       </div>
-      <div>
+      <div style="margin-top: 16px;">
         <div class="meta">Context</div>
-        <div class="value-block">
+        <div class="value-block" style="margin-top: 4px;">
           {% if project_manager.display.project_context %}
             {% if project_manager.display.project_context.purpose %}
               <div><strong>{{ project_manager.display.project_context.purpose }}</strong></div>

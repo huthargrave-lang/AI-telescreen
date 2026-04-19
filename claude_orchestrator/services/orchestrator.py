@@ -254,23 +254,23 @@ class OrchestratorService:
             {
                 "value": "auto",
                 "label": "Auto",
-                "hint": "available, prefers Codex",
+                "hint": "manager decides",
             }
         ]
-        if "codex_cli" in self.backends:
-            options.append(
-                {
-                    "value": "codex",
-                    "label": "Codex",
-                    "hint": "use Codex for launched coding tasks",
-                }
-            )
         if self.preferred_claude_coding_backend() is not None:
             options.append(
                 {
                     "value": "claude",
                     "label": "Claude",
-                    "hint": "use the best available Claude executor",
+                    "hint": "always use Claude",
+                }
+            )
+        if "codex_cli" in self.backends:
+            options.append(
+                {
+                    "value": "codex",
+                    "label": "Codex",
+                    "hint": "always use Codex",
                 }
             )
         return options

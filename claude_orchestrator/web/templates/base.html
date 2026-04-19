@@ -310,7 +310,12 @@
       .form-grid {
         display: grid;
         gap: 16px;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      }
+      .form-grid label span.meta,
+      label > span.meta {
+        display: block;
+        margin-bottom: 4px;
       }
       .form-grid .full {
         grid-column: 1 / -1;
