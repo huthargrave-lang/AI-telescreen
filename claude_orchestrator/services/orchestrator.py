@@ -394,6 +394,7 @@ class OrchestratorService:
         initial_context: Optional[str] = None,
         default_model: Optional[str] = None,
         auto_resume_on_quota: bool = False,
+        allow_extra_usage: bool = False,
     ) -> SavedProject:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
@@ -410,6 +411,7 @@ class OrchestratorService:
             initial_context=initial_context,
             default_model=default_model,
             auto_resume_on_quota=auto_resume_on_quota,
+            allow_extra_usage=allow_extra_usage,
         )
         self.project_manager.sync_project(project.id)
         if initial_context and initial_context.strip():
@@ -431,6 +433,7 @@ class OrchestratorService:
         initial_context: Optional[str] = None,
         default_model: Optional[str] = None,
         auto_resume_on_quota: bool = False,
+        allow_extra_usage: bool = False,
     ) -> SavedProject:
         resolved_repo_path = Path(repo_path).expanduser().resolve()
         if not resolved_repo_path.exists() or not resolved_repo_path.is_dir():
@@ -448,6 +451,7 @@ class OrchestratorService:
             initial_context=initial_context,
             default_model=default_model,
             auto_resume_on_quota=auto_resume_on_quota,
+            allow_extra_usage=allow_extra_usage,
         )
         self.project_manager.sync_project(project.id)
         return project
@@ -466,6 +470,7 @@ class OrchestratorService:
             autonomy_mode=autonomy_mode,
             default_model=project.default_model,
             auto_resume_on_quota=project.auto_resume_on_quota,
+            allow_extra_usage=project.allow_extra_usage,
         )
 
     def set_project_default_model(self, project_id: str, default_model: Optional[str]) -> SavedProject:
@@ -482,6 +487,7 @@ class OrchestratorService:
             autonomy_mode=project.autonomy_mode,
             default_model=default_model,
             auto_resume_on_quota=project.auto_resume_on_quota,
+            allow_extra_usage=project.allow_extra_usage,
         )
 
     def launch_job_from_project(
@@ -1677,6 +1683,8 @@ class OrchestratorService:
             return
         if self.project_manager._normalize_autonomy_mode(project.autonomy_mode) != "full":
             return
+        if not project.allow_extra_usage and self._last_run_used_extra_usage(job):
+            return
         session = self.describe_project_manager_session(project_id)
         next_job_id = session.active_managed_job_id
         if not next_job_id or next_job_id == job.id:
@@ -2315,6 +2323,18 @@ class OrchestratorService:
             },
             metadata_remove_keys=("followup_type", "followup_reason", "followup_requested_at", "resume_hint"),
         )
+
+    def _last_run_used_extra_usage(self, job: Job) -> bool:
+        """Check if the latest run for this job reported extra usage spending."""
+        try:
+            runs = self.repository.get_job_runs(job.id)
+        except Exception:
+            return False
+        if not runs:
+            return False
+        latest_run = runs[-1]
+        usage = latest_run.usage or {}
+        return bool(usage.get("is_extra_usage"))
 
     def _check_auto_resume_on_quota(self, job: Job, decision: Any) -> Optional[datetime]:
         """If the project has auto-resume enabled and this was a rate limit failure,

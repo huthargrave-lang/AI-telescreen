@@ -196,6 +196,7 @@ class SavedProject:
     initial_context: Optional[str] = None
     default_model: Optional[str] = None
     auto_resume_on_quota: bool = False
+    allow_extra_usage: bool = False
 
 
 @dataclass

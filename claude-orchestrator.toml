@@ -72,7 +72,7 @@ enabled = true
 executable = "claude"
 # Uses your local `claude` CLI authentication (your Claude subscription) — no API key required.
 # The prompt is piped to stdin; {model} is substituted per-project.
-command_template = ["{executable}", "--print", "--model", "{model}"]
+command_template = ["{executable}", "--print", "--model", "{model}", "--output-format", "json"]
 auth_check_command = ["{executable}", "--version"]
 hook_commands = []
 allow_hooks = false

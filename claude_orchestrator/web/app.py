@@ -271,6 +271,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             badges.append({"label": short_model, "title": f"Model: {project.default_model}"})
         if project.auto_resume_on_quota:
             badges.append({"label": "auto-resume", "title": "Auto-resume when rate limit quota resets"})
+        if project.allow_extra_usage:
+            badges.append({"label": "extra usage", "title": "Allowed to spend extra usage credits"})
         return {
             "badges": badges,
             "fallback": "Uses app defaults" if not badges else None,
@@ -600,7 +602,8 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 manager_headline = "Working"
                 manager_detail = (
                     (focus_job or {}).get("latest_progress_preview")
-                    or "Agent is executing the current step."
+                    or (focus_job or {}).get("prompt_preview")
+                    or ""
                 )
                 manager_action = ""
             elif session.get("active_job_status") == JobStatus.WAITING_RETRY.value:
@@ -693,7 +696,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 agent_detail = queue_reason or "Waiting for a worker to pick it up."
             elif status == JobStatus.RUNNING.value:
                 agent_headline = "Task running"
-                agent_detail = focus_job.get("latest_progress_preview") or "The coding agent is actively working."
+                agent_detail = focus_job.get("latest_progress_preview") or focus_job.get("prompt_preview") or "Working..."
             elif status == JobStatus.COMPLETED.value:
                 agent_headline = "Task completed"
                 agent_detail = focus_job.get("latest_progress_preview") or "The coding agent finished the current step."
@@ -1135,6 +1138,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "initial_context": "",
             "default_model": "",
             "auto_resume_on_quota": False,
+            "allow_extra_usage": False,
         }
         if form_values:
             values.update(form_values)
@@ -1432,6 +1436,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 "helper_text": lifecycle.helper_text,
             },
             "last_error_preview": error_preview,
+            "prompt_preview": _truncate_text(job.prompt, limit=200),
         }
 
     def serialize_project_integration(summary) -> dict:
@@ -1785,6 +1790,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "initial_context": str(form.get("initial_context") or ""),
             "default_model": str(form.get("default_model") or ""),
             "auto_resume_on_quota": _coerce_checkbox(form.get("auto_resume_on_quota")),
+            "allow_extra_usage": _coerce_checkbox(form.get("allow_extra_usage")),
         }
         try:
             if not form_values["name"].strip():
@@ -1807,6 +1813,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 initial_context=form_values["initial_context"].strip() or None,
                 default_model=form_values["default_model"].strip() or None,
                 auto_resume_on_quota=form_values["auto_resume_on_quota"],
+                allow_extra_usage=form_values["allow_extra_usage"],
             )
         except Exception as exc:
             return templates.TemplateResponse(
@@ -1838,6 +1845,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     "initial_context": project.initial_context or "",
                     "default_model": project.default_model or "",
                     "auto_resume_on_quota": project.auto_resume_on_quota,
+                    "allow_extra_usage": project.allow_extra_usage,
                 },
             ),
         )
@@ -1859,6 +1867,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
             "initial_context": str(form.get("initial_context") or ""),
             "default_model": str(form.get("default_model") or ""),
             "auto_resume_on_quota": _coerce_checkbox(form.get("auto_resume_on_quota")),
+            "allow_extra_usage": _coerce_checkbox(form.get("allow_extra_usage")),
         }
         try:
             if not form_values["name"].strip():
@@ -1882,6 +1891,7 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 initial_context=form_values["initial_context"].strip() or None,
                 default_model=form_values["default_model"].strip() or None,
                 auto_resume_on_quota=form_values["auto_resume_on_quota"],
+                allow_extra_usage=form_values["allow_extra_usage"],
             )
         except Exception as exc:
             return templates.TemplateResponse(

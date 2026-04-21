@@ -307,6 +307,7 @@ class JobRepository:
         initial_context: Optional[str] = None,
         default_model: Optional[str] = None,
         auto_resume_on_quota: bool = False,
+        allow_extra_usage: bool = False,
     ) -> SavedProject:
         project_id = str(uuid.uuid4())
         now = utcnow()
@@ -326,9 +327,10 @@ class JobRepository:
                     initial_context,
                     default_model,
                     auto_resume_on_quota,
+                    allow_extra_usage,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     project_id,
@@ -343,6 +345,7 @@ class JobRepository:
                     initial_context,
                     default_model,
                     1 if auto_resume_on_quota else 0,
+                    1 if allow_extra_usage else 0,
                     to_iso8601(now),
                     to_iso8601(now),
                 ),
@@ -384,6 +387,7 @@ class JobRepository:
         initial_context: Optional[str] = None,
         default_model: Optional[str] = None,
         auto_resume_on_quota: bool = False,
+        allow_extra_usage: bool = False,
     ) -> SavedProject:
         now = utcnow()
         with self.db.connect() as connection:
@@ -402,6 +406,7 @@ class JobRepository:
                     initial_context = ?,
                     default_model = ?,
                     auto_resume_on_quota = ?,
+                    allow_extra_usage = ?,
                     updated_at = ?
                 WHERE id = ?
                 """,
@@ -417,6 +422,7 @@ class JobRepository:
                     initial_context,
                     default_model,
                     1 if auto_resume_on_quota else 0,
+                    1 if allow_extra_usage else 0,
                     to_iso8601(now),
                     project_id,
                 ),
@@ -1674,6 +1680,7 @@ class JobRepository:
         initial_context = None
         default_model = None
         auto_resume_on_quota = False
+        allow_extra_usage = False
         try:
             initial_context = row["initial_context"]
         except (IndexError, KeyError):
@@ -1684,6 +1691,10 @@ class JobRepository:
             pass
         try:
             auto_resume_on_quota = bool(row["auto_resume_on_quota"])
+        except (IndexError, KeyError):
+            pass
+        try:
+            allow_extra_usage = bool(row["allow_extra_usage"])
         except (IndexError, KeyError):
             pass
         return SavedProject(
@@ -1701,6 +1712,7 @@ class JobRepository:
             initial_context=initial_context,
             default_model=default_model,
             auto_resume_on_quota=auto_resume_on_quota,
+            allow_extra_usage=allow_extra_usage,
         )
 
     def _row_to_project_manager_state(self, row: Any) -> ProjectManagerState:

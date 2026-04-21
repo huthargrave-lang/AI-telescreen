@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import shlex
 import shutil
 from pathlib import Path
@@ -55,19 +56,21 @@ class ClaudeCodeCliBackend(BackendAdapter):
             if "network" in lowered or "connection" in lowered or "unavailable" in lowered:
                 raise RetryableBackendError(stderr_text or "Claude Code CLI transport failure.")
             raise PermanentBackendError(stderr_text or "Claude Code CLI exited with a non-zero code.")
-        response_artifact = store_response_artifact(workspace, stdout_text, name="claude_code_stdout.txt")
+        response_text, usage = self._parse_cli_output(stdout_text)
+        response_artifact = store_response_artifact(workspace, response_text, name="claude_code_stdout.txt")
         updated_state = ConversationState(
             job_id=job.id,
             system_prompt=state.system_prompt,
-            message_history=state.message_history + [{"role": "assistant", "content": stdout_text}],
-            compact_summary=(stdout_text[:280] + "...") if len(stdout_text) > 280 else stdout_text,
+            message_history=state.message_history + [{"role": "assistant", "content": response_text}],
+            compact_summary=(response_text[:280] + "...") if len(response_text) > 280 else response_text,
             tool_context=dict(state.tool_context),
             last_checkpoint_at=utcnow(),
         )
         return BackendResult(
             status=JobStatus.COMPLETED,
-            output=stdout_text,
+            output=response_text,
             updated_state=updated_state,
+            usage=usage,
             headers={},
             artifacts=[
                 ArtifactRecord(
@@ -181,6 +184,35 @@ class ClaudeCodeCliBackend(BackendAdapter):
             )
         tokens[0] = resolved
         return tokens
+
+    def _parse_cli_output(self, stdout_text: str) -> Tuple[str, Dict[str, Any]]:
+        """Extract response text and usage from CLI output.
+
+        When --output-format json is used, stdout is a JSON object with
+        result text and usage stats. Otherwise falls back to plain text.
+        """
+        if not stdout_text.strip():
+            return stdout_text, {}
+        try:
+            data = json.loads(stdout_text)
+            if isinstance(data, dict):
+                result_text = str(data.get("result") or data.get("content") or data.get("text") or "")
+                usage: Dict[str, Any] = {}
+                raw_usage = data.get("usage") or {}
+                if isinstance(raw_usage, dict):
+                    usage = {
+                        "input_tokens": raw_usage.get("input_tokens", 0),
+                        "output_tokens": raw_usage.get("output_tokens", 0),
+                        "cache_read_input_tokens": raw_usage.get("cache_read_input_tokens", 0),
+                        "cache_creation_input_tokens": raw_usage.get("cache_creation_input_tokens", 0),
+                    }
+                is_extra = data.get("is_extra_usage") or data.get("extra_usage") or False
+                if is_extra:
+                    usage["is_extra_usage"] = True
+                return result_text or stdout_text, usage
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+        return stdout_text, {}
 
     async def _run_subprocess(
         self,

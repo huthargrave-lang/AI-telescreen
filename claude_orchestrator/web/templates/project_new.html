@@ -77,6 +77,10 @@
               <input type="checkbox" name="auto_resume_on_quota" {% if form_values.auto_resume_on_quota %}checked{% endif %} style="width: auto;" />
               Auto-resume on quota reset
             </label>
+            <label style="display: flex; gap: 6px; align-items: center;">
+              <input type="checkbox" name="allow_extra_usage" {% if form_values.allow_extra_usage %}checked{% endif %} style="width: auto;" />
+              Allow extra usage spending
+            </label>
           </div>
           <label>
             <span class="meta">Provider</span>
