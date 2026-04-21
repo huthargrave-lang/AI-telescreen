@@ -218,7 +218,7 @@ def test_project_manager_submit_message_creates_structured_response_and_history(
     assert snapshot.state.latest_response.draft_task is not None
     assert snapshot.state.latest_response.draft_task.execution_mode == "read_only"
     assert snapshot.state.latest_response.draft_task.backend == "messages_api"
-    assert snapshot.state.display_snapshot["reply_lead"] == "Sounds good. I’d start with a read-only review."
+    assert snapshot.state.display_snapshot["reply_lead"] == "Next up: a read-only review."
     assert "PLAN / CHANGED / RESULT / TESTS / BLOCKERS / NEXT" in snapshot.state.latest_response.draft_task.prompt
     assert "Goal:\n" in snapshot.state.latest_response.draft_task.prompt
     assert [message.role for message in snapshot.recent_messages][-2:] == ["operator", "manager"]
@@ -291,7 +291,7 @@ def test_project_manager_partial_autonomy_launches_then_waits_for_continue(tmp_p
     assert refreshed.state.latest_response.decision == "launch_followup_job"
     assert refreshed.state.latest_response.draft_task is not None
     assert refreshed.state.auto_tasks_run_count == 1
-    assert refreshed.state.display_snapshot["reply_question"] == "I finished the current step. Want me to keep going?"
+    assert refreshed.state.display_snapshot["reply_question"] == ""
 
 
 def test_project_manager_full_autonomy_launches_next_step_until_stop_condition(tmp_path):
