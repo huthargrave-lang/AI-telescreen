@@ -2145,39 +2145,12 @@ class ProjectManagerService:
             rolling_facts=rolling_facts,
         )
         if workflow_state == "running_current_task":
-            display_snapshot["reply_question"] = "I’m on it now and I’ll report back after the result is in."
-            display_snapshot["conversation_reply"] = " ".join(
-                part
-                for part in [
-                    display_snapshot.get("reply_lead"),
-                    display_snapshot.get("reply_why"),
-                    display_snapshot.get("reply_question"),
-                ]
-                if part
-            ).strip()
+            display_snapshot["reply_question"] = ""
         if workflow_state == "awaiting_continue_decision":
-            display_snapshot["reply_question"] = "I finished the current step. Want me to keep going?"
-            display_snapshot["conversation_reply"] = " ".join(
-                part
-                for part in [
-                    display_snapshot.get("reply_lead"),
-                    display_snapshot.get("reply_why"),
-                    display_snapshot.get("reply_question"),
-                ]
-                if part
-            ).strip()
+            display_snapshot["reply_question"] = ""
         if workflow_state == "blocked_on_manual_test":
-            display_snapshot["reply_lead"] = "I’m paused until manual testing is complete."
-            display_snapshot["reply_question"] = "Leave feedback here when the check is done."
-            display_snapshot["conversation_reply"] = " ".join(
-                part
-                for part in [
-                    display_snapshot.get("reply_lead"),
-                    display_snapshot.get("reply_why"),
-                    display_snapshot.get("reply_question"),
-                ]
-                if part
-            ).strip()
+            display_snapshot["reply_lead"] = "Paused for manual testing."
+            display_snapshot["reply_question"] = ""
 
     def _normalize_response(self, response: ProjectManagerResponse) -> ProjectManagerResponse:
         phase = response.phase if response.phase in self.VALID_PHASES else "planning"
@@ -2505,41 +2478,42 @@ class ProjectManagerService:
     def _build_conversational_reply(self, response: ProjectManagerResponse) -> Dict[str, str]:
         draft_task = response.draft_task
         execution_mode = draft_task.execution_mode if draft_task and draft_task.execution_mode else None
+        draft_preview = self._truncate(draft_task.prompt, 200) if draft_task and draft_task.prompt else ""
         if response.decision == "launch_followup_job":
             if execution_mode == "read_only":
-                lead = "Sounds good. I’d start with a read-only review."
+                lead = "Next up: a read-only review."
                 title = "Read-only review"
             elif response.phase == "debugging":
-                lead = "I found a focused debugging step to run next."
+                lead = "Next up: a debugging pass."
                 title = "Focused debugging pass"
             elif execution_mode == "safe_changes":
-                lead = "I found one small safe pass worth running next."
+                lead = "Next up: a small safe change."
                 title = "Small safe pass"
             else:
-                lead = "I found the next scoped coding pass."
+                lead = "Next up:"
                 title = "Next coding pass"
-            question = "Want me to run it?" if draft_task else "Want me to refine it first?"
+            question = ""
         elif response.decision == "request_manual_test":
-            lead = "I’m pausing here until manual testing is complete."
+            lead = "Paused for manual testing."
             title = "Manual verification"
-            question = "Want the checklist right here?"
+            question = ""
         elif response.decision == "mark_complete":
-            lead = "This looks stable enough to treat the current phase as done."
+            lead = "This phase looks done."
             title = "Current phase looks complete"
-            question = "Want to add that to Project Context or spin up one more pass?"
+            question = ""
         elif response.decision == "needs_clarification":
-            lead = "Before I launch work, I’d tighten the scope a bit."
+            lead = "Need a bit more clarity before launching."
             title = "Clarify the next pass"
-            question = response.followup_questions[0] if response.followup_questions else "What single outcome matters most next?"
+            question = response.followup_questions[0] if response.followup_questions else ""
         else:
             if response.phase == "blocked":
-                lead = "I’m holding here until the current blocker is cleared."
+                lead = "Blocked until the current issue is cleared."
                 title = "Blocked for now"
             else:
-                lead = "I’m holding here until the current workflow is resolved."
+                lead = "Waiting for input."
                 title = "Waiting on the current workflow"
             question = response.followup_questions[0] if response.followup_questions else ""
-        why = response.reason or (response.summary_bullets[0] if response.summary_bullets else "")
+        why = draft_preview or response.reason or (response.summary_bullets[0] if response.summary_bullets else "")
         full_text = " ".join(part for part in [lead, why, question] if part).strip()
         return {
             "lead": lead,

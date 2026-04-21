@@ -66,11 +66,15 @@
           </div>
         </div>
 
-      {# ── READY TO CONTINUE: prominent approve/continue ── #}
+      {# ── READY TO CONTINUE: show what's next with approve/continue ── #}
       {% elif ws == "awaiting_continue_decision" and project_manager.workspace.manager.primary_action.kind == "continue" %}
         <div class="action-card" style="margin-bottom: 14px; border-color: var(--ok); background: rgba(15, 118, 110, 0.04);">
-          <h3>{{ project_manager.workspace.manager.headline }}</h3>
-          {% if project_manager.workspace.manager.detail %}
+          <h3>Ready for next step</h3>
+          {% if project_manager.response.draft_task and project_manager.response.draft_task.prompt %}
+            <div style="margin-top: 6px; padding: 10px 12px; background: rgba(0,0,0,0.03); border-radius: 10px; font-size: 0.92rem;">
+              {{ project_manager.response.draft_task.prompt[:300] }}{% if project_manager.response.draft_task.prompt|length > 300 %}…{% endif %}
+            </div>
+          {% elif project_manager.workspace.manager.detail %}
             <div class="meta" style="margin-top: 2px;">{{ project_manager.workspace.manager.detail }}</div>
           {% endif %}
           <div class="toolbar" style="margin-top: 12px;">
@@ -84,11 +88,15 @@
           </div>
         </div>
 
-      {# ── AWAITING CONFIRMATION: launch button ── #}
+      {# ── AWAITING CONFIRMATION: show draft task with launch button ── #}
       {% elif ws == "awaiting_confirmation" or (project_manager.workspace.manager.primary_action.kind == "launch_draft") %}
         <div class="action-card" style="margin-bottom: 14px; border-color: var(--accent); background: rgba(0, 95, 115, 0.04);">
           <h3>{{ project_manager.workspace.manager.headline }}</h3>
-          {% if project_manager.workspace.manager.detail %}
+          {% if project_manager.response.draft_task and project_manager.response.draft_task.prompt %}
+            <div style="margin-top: 6px; padding: 10px 12px; background: rgba(0,0,0,0.03); border-radius: 10px; font-size: 0.92rem;">
+              {{ project_manager.response.draft_task.prompt[:300] }}{% if project_manager.response.draft_task.prompt|length > 300 %}…{% endif %}
+            </div>
+          {% elif project_manager.workspace.manager.detail %}
             <div class="meta" style="margin-top: 2px;">{{ project_manager.workspace.manager.detail }}</div>
           {% endif %}
           <div class="toolbar" style="margin-top: 12px;">

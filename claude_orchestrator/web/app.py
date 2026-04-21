@@ -612,9 +612,9 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                 manager_detail = session.get("detail") or ""
                 manager_action = ""
         elif workflow_state == "awaiting_continue_decision":
-            manager_headline = "Step complete. Ready for next."
-            manager_detail = response.get("reason") or display.get("reply_why") or session.get("detail") or ""
-            manager_action = "Continue?"
+            manager_headline = "Ready for next step"
+            manager_detail = ""
+            manager_action = ""
         elif workflow_state == "blocked_on_manual_test":
             manager_headline = "Action needed"
             manager_detail = response.get("reason") or session.get("detail") or ""
@@ -735,17 +735,18 @@ def build_app(root: Optional[Path] = None, config_path: Optional[Path] = None):
                     outcome_headline = f"{coding_agent_label} is working on the current task."
                 outcome_detail = agent_detail
             elif status == JobStatus.COMPLETED.value:
+                result_preview = (
+                    (latest_event or {}).get("response_summary_preview")
+                    or focus_job.get("latest_progress_preview")
+                    or ""
+                )
                 if changed_files:
                     outcome_headline = f"{coding_agent_label} completed a code change."
                 elif execution_mode == "read_only":
                     outcome_headline = f"{coding_agent_label} completed a read-only review."
                 else:
                     outcome_headline = f"{coding_agent_label} completed the current task."
-                outcome_detail = (
-                    (latest_event or {}).get("response_summary_preview")
-                    or focus_job.get("latest_progress_preview")
-                    or "The current step finished and the Project Manager reviewed the result."
-                )
+                outcome_detail = result_preview or "Done."
             elif status == JobStatus.FAILED.value:
                 outcome_headline = f"{coding_agent_label} failed on the current task."
                 outcome_detail = agent_detail
